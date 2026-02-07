@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Unit tests with coverage
+        run: dotnet test tests/Rmq.CloudEvents.Tests --no-build -c Release --collect:"XPlat Code Coverage"
+
+      - name: Integration tests
+        run: dotnet test tests/Rmq.CloudEvents.IntegrationTests --no-build -c Release
+
+      - name: Pack
+        if: github.ref == 'refs/heads/main'
+        run: dotnet pack src/Rmq.CloudEvents --no-build -c Release -o ./artifacts

@@ -416,3 +416,8 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Standard .NET build artifacts
+bin/
+obj/
+artifacts/

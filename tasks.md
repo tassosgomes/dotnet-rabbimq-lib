@@ -1,0 +1,14 @@
+# Tasks - Rmq.CloudEvents Library
+
+> Cada tarefa possui detalhamento completo em `tasks/task_N.md`
+
+- [ ] **task_1** - Scaffolding da Solution e Projetos (Directory.Build.props, .sln, .csproj, .gitignore, estrutura de pastas)
+- [ ] **task_2** - Modelos de Configuracao e Excecoes (RmqOptions, ConnectionOptions, RetryOptions, DlqOptions, QueueOptions, CloudEventsOptions + todas as excecoes customizadas + testes)
+- [ ] **task_3** - Serializacao e CloudEvents Wrapper (IMessageSerializer, SystemTextJsonMessageSerializer, CloudEventMetadata, ICloudEventWrapper, CloudEventWrapper + testes unitarios)
+- [ ] **task_4** - Connection Manager e Queue Manager (IRmqConnectionManager, RmqConnectionManager, IQueueManager, QueueManager + testes unitarios)
+- [ ] **task_5** - Publisher com Retry Exponencial (IRmqPublisher, RmqPublisher, Polly ResiliencePipeline + testes unitarios)
+- [ ] **task_6** - Consumer com Retry e ACK/NACK (MessageContext, IRmqMessageHandler, IRmqConsumer, RmqAsyncConsumerHandler, RmqConsumer + testes unitarios)
+- [ ] **task_7** - Dependency Injection e ServiceCollection Extensions (AddRmqCloudEvents, AddRmqConsumer + testes unitarios)
+- [ ] **task_8** - Testes de Integracao com Testcontainers (RabbitMqFixture, roundtrip, CloudEvents wire, DLQ routing, multi-queue)
+- [ ] **task_9** - Sample Application e CI/CD (Program.cs de exemplo, GitHub Actions workflow)
+- [ ] **task_10** - Validacao Final, Build e Correcoes (build Release, testes, cobertura, pack NuGet, revisao)
