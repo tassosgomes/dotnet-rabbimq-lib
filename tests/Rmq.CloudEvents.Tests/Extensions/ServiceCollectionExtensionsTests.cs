@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Rmq.CloudEvents.CloudEvents;
 using Rmq.CloudEvents.Configuration;
 using Rmq.CloudEvents.Connection;
@@ -28,12 +29,46 @@ public sealed class ServiceCollectionExtensionsTests
 
         await using var provider = services.BuildServiceProvider();
 
-        provider.GetService<RmqOptions>().Should().NotBeNull();
-        provider.GetService<IRmqConnectionManager>().Should().NotBeNull();
-        provider.GetService<IQueueManager>().Should().NotBeNull();
-        provider.GetService<ICloudEventWrapper>().Should().NotBeNull();
-        provider.GetService<IMessageSerializer>().Should().NotBeNull();
-        provider.GetService<IRmqPublisher>().Should().NotBeNull();
+        provider.GetRequiredService<IOptions<RmqOptions>>().Value.Connection.HostName.Should().Be("localhost");
+        provider.GetRequiredService<RmqOptions>().DefaultCloudEvents.Source.Should().Be(new Uri("/my-service", UriKind.Relative));
+        provider.GetRequiredService<IRmqConnectionManager>().Should().NotBeNull();
+        provider.GetRequiredService<IQueueManager>().Should().NotBeNull();
+        provider.GetRequiredService<ICloudEventWrapper>().Should().NotBeNull();
+        provider.GetRequiredService<IMessageSerializer>().Should().NotBeNull();
+        provider.GetRequiredService<IRmqPublisher>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddRmqCloudEvents_ShouldRegisterExpectedLifetimes()
+    {
+        var services = new ServiceCollection();
+
+        services.AddRmqCloudEvents(_ => { });
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IRmqConnectionManager)
+            && descriptor.ImplementationType == typeof(RmqConnectionManager)
+            && descriptor.Lifetime == ServiceLifetime.Singleton);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IQueueManager)
+            && descriptor.ImplementationType == typeof(QueueManager)
+            && descriptor.Lifetime == ServiceLifetime.Singleton);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(ICloudEventWrapper)
+            && descriptor.ImplementationType == typeof(CloudEventWrapper)
+            && descriptor.Lifetime == ServiceLifetime.Singleton);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IMessageSerializer)
+            && descriptor.ImplementationType == typeof(SystemTextJsonMessageSerializer)
+            && descriptor.Lifetime == ServiceLifetime.Singleton);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IRmqPublisher)
+            && descriptor.ImplementationType == typeof(RmqPublisher)
+            && descriptor.Lifetime == ServiceLifetime.Transient);
     }
 
     [Fact]
@@ -46,7 +81,16 @@ public sealed class ServiceCollectionExtensionsTests
 
         await using var provider = services.BuildServiceProvider();
 
-        provider.GetService<IRmqMessageHandler<TestMessage>>().Should().NotBeNull();
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IRmqMessageHandler<TestMessage>)
+            && descriptor.ImplementationType == typeof(TestMessageHandler)
+            && descriptor.Lifetime == ServiceLifetime.Transient);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService)
+            && descriptor.Lifetime == ServiceLifetime.Singleton);
+
+        provider.GetRequiredService<IRmqMessageHandler<TestMessage>>().Should().NotBeNull();
         provider.GetServices<IHostedService>().Should().ContainSingle();
     }
 

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Rmq.CloudEvents.CloudEvents;
 using Rmq.CloudEvents.Configuration;
 using Rmq.CloudEvents.Connection;
@@ -28,12 +29,10 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configure);
 
-        var options = new RmqOptions();
-        configure(options);
-
-        services.AddSingleton(options);
-        services.AddSingleton(options.Connection);
-        services.AddSingleton(options.DefaultCloudEvents);
+        services.Configure(configure);
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<RmqOptions>>().Value);
+        services.AddSingleton(sp => sp.GetRequiredService<RmqOptions>().Connection);
+        services.AddSingleton(sp => sp.GetRequiredService<RmqOptions>().DefaultCloudEvents);
 
         services.AddSingleton<IRmqConnectionManager, RmqConnectionManager>();
         services.AddSingleton<IQueueManager, QueueManager>();
@@ -62,7 +61,7 @@ public static class ServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
         services.AddTransient<IRmqMessageHandler<TMessage>, THandler>();
-        services.AddSingleton<IHostedService>(sp =>
+        services.AddHostedService(sp =>
             new RmqConsumer<TMessage>(
                 sp.GetRequiredService<IRmqConnectionManager>(),
                 sp.GetRequiredService<IQueueManager>(),
@@ -70,7 +69,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IRmqMessageHandler<TMessage>>(),
                 sp.GetRequiredService<RmqOptions>(),
                 queueName,
-                logger: null));
+                sp.GetService<Microsoft.Extensions.Logging.ILogger<RmqConsumer<TMessage>>>()));
 
         return services;
     }
