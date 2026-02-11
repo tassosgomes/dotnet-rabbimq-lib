@@ -48,7 +48,15 @@ internal sealed class CloudEventWrapper : ICloudEventWrapper
     /// <inheritdoc />
     public (T Payload, CloudEventMetadata Metadata) Unwrap<T>(ReadOnlyMemory<byte> data) where T : class
     {
-        var cloudEvent = _formatter.DecodeStructuredModeMessage(data, null, null);
+        CloudNative.CloudEvents.CloudEvent cloudEvent;
+        try
+        {
+            cloudEvent = _formatter.DecodeStructuredModeMessage(data, null, null);
+        }
+        catch (Exception exception)
+        {
+            throw new RmqConsumeException("Falha ao decodificar CloudEvent em modo structured JSON.", exception);
+        }
 
         var payload = cloudEvent.Data switch
         {

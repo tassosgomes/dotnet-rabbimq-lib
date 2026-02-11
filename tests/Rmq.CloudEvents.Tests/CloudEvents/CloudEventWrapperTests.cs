@@ -11,6 +11,20 @@ namespace Rmq.CloudEvents.Tests.CloudEvents;
 public sealed class CloudEventWrapperTests
 {
     [Fact]
+    public void WrapUnwrap_ShouldRoundtripSimplePayload()
+    {
+        var wrapper = CreateWrapper();
+        var payload = new PingPayload("ok");
+
+        var bytes = wrapper.Wrap(payload);
+        var (result, metadata) = wrapper.Unwrap<PingPayload>(bytes);
+
+        result.Should().BeEquivalentTo(payload);
+        metadata.EventId.Should().NotBeNullOrWhiteSpace();
+        metadata.Source.Should().Be(new Uri("/my-service", UriKind.Relative));
+    }
+
+    [Fact]
     public void WrapUnwrap_ShouldRoundtripPayloadAndMetadata()
     {
         var wrapper = CreateWrapper();
@@ -62,7 +76,7 @@ public sealed class CloudEventWrapperTests
 
         var action = () => wrapper.Unwrap<OrderCreated>(invalidBytes);
 
-        action.Should().Throw<Exception>();
+        action.Should().Throw<RmqConsumeException>();
     }
 
     [Fact]
@@ -100,5 +114,7 @@ public sealed class CloudEventWrapperTests
     }
 
     private sealed record OrderCreated(int OrderId, string CustomerId, IReadOnlyList<string> Tags);
+
+    private sealed record PingPayload(string Status);
 
 }
