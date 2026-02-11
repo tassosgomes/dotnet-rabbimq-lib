@@ -4,7 +4,7 @@
 
 - [X] **task_1** - Scaffolding da Solution e Projetos (Directory.Build.props, .sln, .csproj, .gitignore, estrutura de pastas)
 - [X] **task_2** - Modelos de Configuracao e Excecoes (RmqOptions, ConnectionOptions, RetryOptions, DlqOptions, QueueOptions, CloudEventsOptions + todas as excecoes customizadas + testes)
-- [ ] **task_3** - Serializacao e CloudEvents Wrapper (IMessageSerializer, SystemTextJsonMessageSerializer, CloudEventMetadata, ICloudEventWrapper, CloudEventWrapper + testes unitarios)
+- [X] **task_3** - Serializacao e CloudEvents Wrapper (IMessageSerializer, SystemTextJsonMessageSerializer, CloudEventMetadata, ICloudEventWrapper, CloudEventWrapper + testes unitarios)
 - [ ] **task_4** - Connection Manager e Queue Manager (IRmqConnectionManager, RmqConnectionManager, IQueueManager, QueueManager + testes unitarios)
 - [ ] **task_5** - Publisher com Retry Exponencial (IRmqPublisher, RmqPublisher, Polly ResiliencePipeline + testes unitarios)
 - [ ] **task_6** - Consumer com Retry e ACK/NACK (MessageContext, IRmqMessageHandler, IRmqConsumer, RmqAsyncConsumerHandler, RmqConsumer + testes unitarios)

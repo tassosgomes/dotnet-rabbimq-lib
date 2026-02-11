@@ -11,7 +11,8 @@ namespace Rmq.CloudEvents.Connection;
 internal sealed class RmqConnectionManager : IRmqConnectionManager
 {
     private readonly RmqConnectionOptions _options;
-    private readonly Func<CancellationToken, Task<IConnection>> _createConnection;
+    private readonly Func<ConnectionFactory> _connectionFactoryFactory;
+    private readonly Func<ConnectionFactory, CancellationToken, Task<IConnection>> _createConnection;
     private readonly ILogger<RmqConnectionManager> _logger;
     private readonly SemaphoreSlim _connectionLock = new(1, 1);
     private IConnection? _connection;
@@ -24,17 +25,19 @@ internal sealed class RmqConnectionManager : IRmqConnectionManager
     public RmqConnectionManager(
         RmqConnectionOptions options,
         ILogger<RmqConnectionManager>? logger = null)
-        : this(options, null, logger)
+        : this(options, null, null, logger)
     {
     }
 
     internal RmqConnectionManager(
         RmqConnectionOptions options,
-        Func<CancellationToken, Task<IConnection>>? createConnection,
+        Func<ConnectionFactory>? connectionFactoryFactory,
+        Func<ConnectionFactory, CancellationToken, Task<IConnection>>? createConnection,
         ILogger<RmqConnectionManager>? logger = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
-        _createConnection = createConnection ?? CreateConnectionInternalAsync;
+        _connectionFactoryFactory = connectionFactoryFactory ?? CreateConnectionFactory;
+        _createConnection = createConnection ?? ((factory, ct) => factory.CreateConnectionAsync(ct));
         _logger = logger ?? NullLogger<RmqConnectionManager>.Instance;
     }
 
@@ -54,7 +57,14 @@ internal sealed class RmqConnectionManager : IRmqConnectionManager
                 return _connection;
             }
 
-            _connection = await _createConnection(cancellationToken).ConfigureAwait(false);
+            if (_connection is not null)
+            {
+                await _connection.DisposeAsync().ConfigureAwait(false);
+                _connection = null;
+            }
+
+            var factory = _connectionFactoryFactory();
+            _connection = await _createConnection(factory, cancellationToken).ConfigureAwait(false);
             _logger.LogInformation("Conexao RabbitMQ estabelecida em {Host}:{Port}", _options.HostName, _options.Port);
             return _connection;
         }
@@ -83,7 +93,7 @@ internal sealed class RmqConnectionManager : IRmqConnectionManager
         _connectionLock.Dispose();
     }
 
-    private async Task<IConnection> CreateConnectionInternalAsync(CancellationToken cancellationToken)
+    private ConnectionFactory CreateConnectionFactory()
     {
         var factory = new ConnectionFactory
         {
@@ -102,6 +112,6 @@ internal sealed class RmqConnectionManager : IRmqConnectionManager
             factory.Ssl = _options.Ssl;
         }
 
-        return await factory.CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return factory;
     }
 }

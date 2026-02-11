@@ -74,4 +74,30 @@ public sealed class QueueManagerTests
             .Should()
             .BeTrue();
     }
+
+    [Fact]
+    public async Task DeclareQueueWithDlqAsync_ShouldSkipQuorumInitialGroupSizeWhenNotConfigured()
+    {
+        var channelMock = new Mock<IChannel>();
+        var manager = new QueueManager();
+        var options = new QueueOptions
+        {
+            QuorumSize = 0,
+            DeliveryLimit = 5
+        };
+
+        await manager.DeclareQueueWithDlqAsync(channelMock.Object, "billing", options);
+
+        var mainDeclare = channelMock.Invocations
+            .Where(x => x.Method.Name == nameof(IChannel.QueueDeclareAsync))
+            .Single(x => (string)x.Arguments[0] == "billing");
+
+        var mainArgs = mainDeclare.Arguments[4] as IDictionary<string, object?>;
+        mainArgs.Should().NotBeNull();
+        mainArgs!.ContainsKey("x-quorum-initial-group-size").Should().BeFalse();
+        mainArgs["x-queue-type"].Should().Be("quorum");
+        mainArgs["x-dead-letter-exchange"].Should().Be("billing.dlx");
+        mainArgs["x-dead-letter-routing-key"].Should().Be("billing");
+        mainArgs["x-delivery-limit"].Should().Be(5);
+    }
 }
