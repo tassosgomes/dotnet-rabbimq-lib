@@ -67,16 +67,22 @@ public sealed class PublishConsumeTests
 
         root.GetProperty("specversion").GetString().Should().Be("1.0");
         root.GetProperty("id").GetString().Should().NotBeNullOrWhiteSpace();
-        root.GetProperty("source").GetString().Should().NotBeNullOrWhiteSpace();
-        root.GetProperty("type").GetString().Should().NotBeNullOrWhiteSpace();
-        root.GetProperty("time").GetString().Should().NotBeNullOrWhiteSpace();
+        root.GetProperty("source").GetString().Should().Be("/integration-tests");
+        root.GetProperty("type").GetString().Should().Be("com.test.event");
+        DateTimeOffset.TryParse(root.GetProperty("time").GetString(), out _).Should().BeTrue();
         var data = root.GetProperty("data");
         if (!data.TryGetProperty("orderId", out var orderIdElement))
         {
             data.TryGetProperty("OrderId", out orderIdElement).Should().BeTrue();
         }
 
+        if (!data.TryGetProperty("customerId", out var customerIdElement))
+        {
+            data.TryGetProperty("CustomerId", out customerIdElement).Should().BeTrue();
+        }
+
         orderIdElement.GetInt32().Should().Be(777);
+        customerIdElement.GetString().Should().Be("wire-customer");
     }
 
     [Fact]

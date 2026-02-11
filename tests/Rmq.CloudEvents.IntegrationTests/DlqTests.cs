@@ -27,8 +27,10 @@ public sealed class DlqTests
     {
         var queueName = $"orders-dlq-{Guid.NewGuid():N}";
         var dlqName = $"{queueName}.dlq";
+        var attemptsCounter = new RetryAttemptCounter();
 
         var services = new ServiceCollection();
+        services.AddSingleton(attemptsCounter);
         services.AddRmqCloudEvents(options =>
         {
             var connection = BuildConnectionOptions(_fixture.ConnectionString);
@@ -42,7 +44,7 @@ public sealed class DlqTests
             {
                 Retry = new RetryOptions
                 {
-                    MaxAttempts = 1,
+                    MaxAttempts = 3,
                     InitialDelay = TimeSpan.FromMilliseconds(50),
                     BackoffType = BackoffType.Exponential,
                     UseJitter = false
@@ -66,6 +68,7 @@ public sealed class DlqTests
         root.GetProperty("id").GetString().Should().NotBeNullOrWhiteSpace();
         root.GetProperty("source").GetString().Should().Be("/integration-tests");
         root.GetProperty("type").GetString().Should().Be("com.test.event");
+        DateTimeOffset.TryParse(root.GetProperty("time").GetString(), out _).Should().BeTrue();
         var data = root.GetProperty("data");
         if (!data.TryGetProperty("orderId", out var orderIdElement))
         {
@@ -73,6 +76,7 @@ public sealed class DlqTests
         }
 
         orderIdElement.GetInt32().Should().Be(9001);
+        attemptsCounter.TotalAttempts.Should().Be(3);
 
         await StopHostedServicesAsync(provider);
     }
@@ -148,10 +152,30 @@ public sealed class DlqTests
 
     public sealed record DlqPayload(int OrderId, string Name);
 
+    public sealed class RetryAttemptCounter
+    {
+        private int _totalAttempts;
+
+        public int TotalAttempts => _totalAttempts;
+
+        public void Increment()
+        {
+            Interlocked.Increment(ref _totalAttempts);
+        }
+    }
+
     public sealed class AlwaysFailingHandler : IRmqMessageHandler<DlqPayload>
     {
+        private readonly RetryAttemptCounter _attemptCounter;
+
+        public AlwaysFailingHandler(RetryAttemptCounter attemptCounter)
+        {
+            _attemptCounter = attemptCounter;
+        }
+
         public Task HandleAsync(DlqPayload message, MessageContext context, CancellationToken cancellationToken)
         {
+            _attemptCounter.Increment();
             throw new InvalidOperationException("Intentional integration failure");
         }
     }
