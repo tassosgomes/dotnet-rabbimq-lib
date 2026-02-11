@@ -35,11 +35,14 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
     {
         _handler = handler ?? throw new ArgumentNullException(nameof(handler));
         _cloudEventWrapper = cloudEventWrapper ?? throw new ArgumentNullException(nameof(cloudEventWrapper));
-        _retryPipeline = BuildRetryPipeline(retryOptions ?? throw new ArgumentNullException(nameof(retryOptions)));
         _queueName = string.IsNullOrWhiteSpace(queueName)
             ? throw new ArgumentException("Queue name must be provided.", nameof(queueName))
             : queueName;
         _logger = logger ?? NullLogger.Instance;
+        _retryPipeline = BuildRetryPipeline(
+            retryOptions ?? throw new ArgumentNullException(nameof(retryOptions)),
+            _logger,
+            _queueName);
     }
 
     /// <inheritdoc />
@@ -56,39 +59,64 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
         try
         {
             var (payload, metadata) = _cloudEventWrapper.Unwrap<T>(body);
-
-            var context = new MessageContext
-            {
-                EventId = metadata.EventId,
-                Source = metadata.Source,
-                EventType = metadata.EventType,
-                Timestamp = metadata.Timestamp,
-                Headers = ConvertHeaders(properties.Headers),
-                DeliveryTag = deliveryTag,
-                QueueName = _queueName,
-                AttemptNumber = redelivered ? 1 : 0
-            };
+            var headers = ConvertHeaders(properties.Headers);
+            var currentAttempt = 0;
 
             await _retryPipeline.ExecuteAsync(
-                async ct => await _handler.HandleAsync(payload, context, ct).ConfigureAwait(false),
+                async ct =>
+                {
+                    currentAttempt++;
+
+                    var context = CreateMessageContext(
+                        metadata,
+                        headers,
+                        deliveryTag,
+                        currentAttempt,
+                        redelivered);
+
+                    await _handler.HandleAsync(payload, context, ct).ConfigureAwait(false);
+                },
                 cancellationToken).ConfigureAwait(false);
 
             await Channel.BasicAckAsync(deliveryTag, multiple: false, cancellationToken).ConfigureAwait(false);
-            _logger.LogDebug("Mensagem {EventId} processada com sucesso da queue {QueueName}", metadata.EventId, _queueName);
+            _logger.LogDebug(
+                "Mensagem {EventId} processada com sucesso da queue {QueueName} na tentativa {AttemptNumber}",
+                metadata.EventId,
+                _queueName,
+                currentAttempt);
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logger.LogInformation(
+                ex,
+                "Processamento da mensagem {DeliveryTag} cancelado na queue {QueueName}. ACK/NACK nao sera enviado.",
+                deliveryTag,
+                _queueName);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Mensagem {DeliveryTag} falhou apos retries na queue {QueueName}. Enviando para DLQ.", deliveryTag, _queueName);
+            _logger.LogError(
+                ex,
+                "Mensagem {DeliveryTag} falhou apos retries na queue {QueueName}. Enviando para DLQ.",
+                deliveryTag,
+                _queueName);
             await Channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private static ResiliencePipeline BuildRetryPipeline(RetryOptions options)
+    private static ResiliencePipeline BuildRetryPipeline(RetryOptions options, ILogger logger, string queueName)
     {
+        var totalAttempts = Math.Max(1, options.MaxAttempts);
+
+        if (totalAttempts == 1)
+        {
+            return new ResiliencePipelineBuilder().Build();
+        }
+
         return new ResiliencePipelineBuilder()
             .AddRetry(new RetryStrategyOptions
             {
-                MaxRetryAttempts = options.MaxAttempts,
+                MaxRetryAttempts = totalAttempts - 1,
                 Delay = options.InitialDelay,
                 BackoffType = options.BackoffType switch
                 {
@@ -97,9 +125,43 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
                     _ => DelayBackoffType.Exponential
                 },
                 UseJitter = options.UseJitter,
-                ShouldHandle = new PredicateBuilder().Handle<Exception>()
+                ShouldHandle = new PredicateBuilder().Handle<Exception>(ex => ex is not OperationCanceledException),
+                OnRetry = args =>
+                {
+                    logger.LogWarning(
+                        args.Outcome.Exception,
+                        "Tentativa de consume {Attempt}/{MaxAttempts} falhou para queue {QueueName}. Proximo retry em {RetryDelay}",
+                        args.AttemptNumber + 2,
+                        totalAttempts,
+                        queueName,
+                        args.RetryDelay);
+
+                    return default;
+                }
             })
             .Build();
+    }
+
+    private MessageContext CreateMessageContext(
+        CloudEventMetadata metadata,
+        IReadOnlyDictionary<string, object> headers,
+        ulong deliveryTag,
+        int currentAttempt,
+        bool redelivered)
+    {
+        var initialAttempt = redelivered ? 2 : 1;
+
+        return new MessageContext
+        {
+            EventId = metadata.EventId,
+            Source = metadata.Source,
+            EventType = metadata.EventType,
+            Timestamp = metadata.Timestamp,
+            Headers = headers,
+            DeliveryTag = deliveryTag,
+            QueueName = _queueName,
+            AttemptNumber = (initialAttempt - 1) + currentAttempt
+        };
     }
 
     private static IReadOnlyDictionary<string, object> ConvertHeaders(IDictionary<string, object?>? headers)

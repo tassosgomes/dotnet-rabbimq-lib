@@ -75,9 +75,47 @@ public sealed class RmqAsyncConsumerHandlerTests
 
         messageHandlerMock.Verify(
             x => x.HandleAsync(It.IsAny<TestPayload>(), It.IsAny<MessageContext>(), It.IsAny<CancellationToken>()),
-            Times.Exactly(2));
+            Times.Once);
         channelMock.Verify(x => x.BasicAckAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
         channelMock.Verify(x => x.BasicNackAsync(9, false, false, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task HandleBasicDeliverAsync_ShouldNotNack_WhenOperationIsCanceled()
+    {
+        var channelMock = CreateChannelMock();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        wrapperMock
+            .Setup(x => x.Unwrap<TestPayload>(It.IsAny<ReadOnlyMemory<byte>>()))
+            .Returns((new TestPayload(1), new CloudEventMetadata("evt-cancel", new Uri("/svc", UriKind.Relative), "type", DateTimeOffset.UtcNow)));
+
+        var messageHandlerMock = new Mock<IRmqMessageHandler<TestPayload>>();
+        messageHandlerMock
+            .Setup(x => x.HandleAsync(It.IsAny<TestPayload>(), It.IsAny<MessageContext>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+
+        var consumer = new RmqAsyncConsumerHandler<TestPayload>(
+            channelMock.Object,
+            messageHandlerMock.Object,
+            wrapperMock.Object,
+            new RetryOptions { MaxAttempts = 3, InitialDelay = TimeSpan.Zero, UseJitter = false },
+            "orders",
+            NullLogger.Instance);
+
+        await consumer.HandleBasicDeliverAsync(
+            "tag",
+            13,
+            false,
+            string.Empty,
+            "orders",
+            new BasicProperties(),
+            new ReadOnlyMemory<byte>([1]));
+
+        messageHandlerMock.Verify(
+            x => x.HandleAsync(It.IsAny<TestPayload>(), It.IsAny<MessageContext>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        channelMock.Verify(x => x.BasicAckAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+        channelMock.Verify(x => x.BasicNackAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -120,8 +158,93 @@ public sealed class RmqAsyncConsumerHandlerTests
         captured.EventType.Should().Be("event.type");
         captured.DeliveryTag.Should().Be(11);
         captured.QueueName.Should().Be("orders");
-        captured.AttemptNumber.Should().Be(1);
+        captured.AttemptNumber.Should().Be(2);
         captured.Headers.Should().ContainKey("x-key");
+    }
+
+    [Fact]
+    public async Task HandleBasicDeliverAsync_ShouldIncreaseAttemptNumberAcrossRetries()
+    {
+        var channelMock = CreateChannelMock();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        wrapperMock
+            .Setup(x => x.Unwrap<TestPayload>(It.IsAny<ReadOnlyMemory<byte>>()))
+            .Returns((new TestPayload(42), new CloudEventMetadata("evt-2", new Uri("/svc", UriKind.Relative), "type", DateTimeOffset.UtcNow)));
+
+        var attempts = new List<int>();
+        var executionCount = 0;
+        var messageHandlerMock = new Mock<IRmqMessageHandler<TestPayload>>();
+        messageHandlerMock
+            .Setup(x => x.HandleAsync(It.IsAny<TestPayload>(), It.IsAny<MessageContext>(), It.IsAny<CancellationToken>()))
+            .Callback<TestPayload, MessageContext, CancellationToken>((_, context, _) => attempts.Add(context.AttemptNumber))
+            .Returns(() =>
+            {
+                executionCount++;
+                if (executionCount == 1)
+                {
+                    throw new InvalidOperationException("transient");
+                }
+
+                return Task.CompletedTask;
+            });
+
+        var consumer = new RmqAsyncConsumerHandler<TestPayload>(
+            channelMock.Object,
+            messageHandlerMock.Object,
+            wrapperMock.Object,
+            new RetryOptions { MaxAttempts = 2, InitialDelay = TimeSpan.Zero, UseJitter = false },
+            "orders",
+            NullLogger.Instance);
+
+        await consumer.HandleBasicDeliverAsync(
+            "tag",
+            12,
+            false,
+            string.Empty,
+            "orders",
+            new BasicProperties(),
+            new ReadOnlyMemory<byte>([1]));
+
+        attempts.Should().Equal([1, 2]);
+        channelMock.Verify(x => x.BasicAckAsync(12, false, It.IsAny<CancellationToken>()), Times.Once);
+        channelMock.Verify(x => x.BasicNackAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task HandleBasicDeliverAsync_ShouldUseMaxAttemptsAsTotalAttempts()
+    {
+        var channelMock = CreateChannelMock();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        wrapperMock
+            .Setup(x => x.Unwrap<TestPayload>(It.IsAny<ReadOnlyMemory<byte>>()))
+            .Returns((new TestPayload(55), new CloudEventMetadata("evt-max", new Uri("/svc", UriKind.Relative), "type", DateTimeOffset.UtcNow)));
+
+        var attempts = 0;
+        var messageHandlerMock = new Mock<IRmqMessageHandler<TestPayload>>();
+        messageHandlerMock
+            .Setup(x => x.HandleAsync(It.IsAny<TestPayload>(), It.IsAny<MessageContext>(), It.IsAny<CancellationToken>()))
+            .Callback(() => attempts++)
+            .ThrowsAsync(new InvalidOperationException("always fail"));
+
+        var consumer = new RmqAsyncConsumerHandler<TestPayload>(
+            channelMock.Object,
+            messageHandlerMock.Object,
+            wrapperMock.Object,
+            new RetryOptions { MaxAttempts = 2, InitialDelay = TimeSpan.Zero, UseJitter = false },
+            "orders",
+            NullLogger.Instance);
+
+        await consumer.HandleBasicDeliverAsync(
+            "tag",
+            14,
+            false,
+            string.Empty,
+            "orders",
+            new BasicProperties(),
+            new ReadOnlyMemory<byte>([1]));
+
+        attempts.Should().Be(2);
+        channelMock.Verify(x => x.BasicNackAsync(14, false, false, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     private static Mock<IChannel> CreateChannelMock()

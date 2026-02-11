@@ -23,8 +23,10 @@ internal sealed class RmqConsumer<T> : IHostedService, IRmqConsumer
     private readonly RmqOptions _options;
     private readonly string _queueName;
     private readonly ILogger<RmqConsumer<T>> _logger;
+    private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private IChannel? _channel;
     private string? _consumerTag;
+    private bool _isStarted;
 
     /// <summary>
     /// Inicializa uma nova instancia de <see cref="RmqConsumer{T}"/>.
@@ -52,61 +54,97 @@ internal sealed class RmqConsumer<T> : IHostedService, IRmqConsumer
     /// <inheritdoc />
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
-        if (_channel is { IsOpen: true })
+        await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return;
+            if (_isStarted && _channel is { IsOpen: true })
+            {
+                return;
+            }
+
+            await _connectionManager.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
+            var channel = await _connectionManager.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
+
+            var queueOptions = GetQueueOptions(_queueName);
+            await _queueManager.DeclareQueueWithDlqAsync(channel, _queueName, queueOptions, cancellationToken).ConfigureAwait(false);
+
+            var consumerHandler = new RmqAsyncConsumerHandler<T>(
+                channel,
+                _messageHandler,
+                _cloudEventWrapper,
+                queueOptions.Retry,
+                _queueName,
+                _logger);
+
+            var consumerTag = await channel.BasicConsumeAsync(
+                queue: _queueName,
+                autoAck: false,
+                consumerTag: string.Empty,
+                noLocal: false,
+                exclusive: false,
+                arguments: null,
+                consumer: consumerHandler,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            _channel = channel;
+            _consumerTag = consumerTag;
+            _isStarted = true;
+
+            _logger.LogInformation("Consumer iniciado para queue {QueueName} com tag {ConsumerTag}", _queueName, _consumerTag);
         }
-
-        _channel = await _connectionManager.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
-
-        var queueOptions = GetQueueOptions(_queueName);
-        await _queueManager.DeclareQueueWithDlqAsync(_channel, _queueName, queueOptions, cancellationToken).ConfigureAwait(false);
-
-        var consumerHandler = new RmqAsyncConsumerHandler<T>(
-            _channel,
-            _messageHandler,
-            _cloudEventWrapper,
-            queueOptions.Retry,
-            _queueName,
-            _logger);
-
-        _consumerTag = await _channel.BasicConsumeAsync(
-            queue: _queueName,
-            autoAck: false,
-            consumerTag: string.Empty,
-            noLocal: false,
-            exclusive: false,
-            arguments: null,
-            consumer: consumerHandler,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        _logger.LogInformation("Consumer iniciado para queue {QueueName} com tag {ConsumerTag}", _queueName, _consumerTag);
+        finally
+        {
+            _lifecycleLock.Release();
+        }
     }
 
     /// <inheritdoc />
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        if (_channel is null)
+        await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return;
-        }
+            if (!_isStarted || _channel is null)
+            {
+                return;
+            }
 
-        if (!string.IsNullOrWhiteSpace(_consumerTag))
+            var channel = _channel;
+            var consumerTag = _consumerTag;
+
+            _channel = null;
+            _consumerTag = null;
+            _isStarted = false;
+
+            if (!string.IsNullOrWhiteSpace(consumerTag))
+            {
+                await channel.BasicCancelAsync(consumerTag, false, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (channel.IsOpen)
+            {
+                await channel.CloseAsync(
+                    replyCode: 200,
+                    replyText: "Consumer stopped",
+                    abort: false,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
+            await channel.DisposeAsync().ConfigureAwait(false);
+
+            _logger.LogInformation("Consumer parado para queue {QueueName}", _queueName);
+        }
+        finally
         {
-            await _channel.BasicCancelAsync(_consumerTag, false, cancellationToken).ConfigureAwait(false);
+            _lifecycleLock.Release();
         }
-
-        await _channel.DisposeAsync().ConfigureAwait(false);
-        _channel = null;
-        _consumerTag = null;
-
-        _logger.LogInformation("Consumer parado para queue {QueueName}", _queueName);
     }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         await StopAsync().ConfigureAwait(false);
+        _lifecycleLock.Dispose();
     }
 
     private QueueOptions GetQueueOptions(string queueName)
