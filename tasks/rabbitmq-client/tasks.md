@@ -9,6 +9,6 @@
 - [X] **task_5** - Publisher com Retry Exponencial (IRmqPublisher, RmqPublisher, Polly ResiliencePipeline + testes unitarios)
 - [X] **task_6** - Consumer com Retry e ACK/NACK (MessageContext, IRmqMessageHandler, IRmqConsumer, RmqAsyncConsumerHandler, RmqConsumer + testes unitarios)
 - [X] **task_7** - Dependency Injection e ServiceCollection Extensions (AddRmqCloudEvents, AddRmqConsumer + testes unitarios)
-- [ ] **task_8** - Testes de Integracao com Testcontainers (RabbitMqFixture, roundtrip, CloudEvents wire, DLQ routing, multi-queue)
+- [X] **task_8** - Testes de Integracao com Testcontainers (RabbitMqFixture, roundtrip, CloudEvents wire, DLQ routing, multi-queue)
 - [ ] **task_9** - Sample Application e CI/CD (Program.cs de exemplo, GitHub Actions workflow)
 - [ ] **task_10** - Validacao Final, Build e Correcoes (build Release, testes, cobertura, pack NuGet, revisao)

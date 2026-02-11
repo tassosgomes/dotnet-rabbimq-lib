@@ -12,7 +12,7 @@ internal static class Program
 {
     private static async Task Main(string[] args)
     {
-        // 1) Build de host e registro da biblioteca no container DI.
+        // 1) Build do host e registro da biblioteca no container DI.
         var builder = Host.CreateApplicationBuilder(args);
         builder.Logging.AddSimpleConsole(options => options.TimestampFormat = "HH:mm:ss ");
 
@@ -46,7 +46,7 @@ internal static class Program
         using var host = builder.Build();
         await host.StartAsync();
 
-        // 3) Publicacao de uma mensagem de exemplo para demonstrar o fluxo completo.
+        // 3) Publicacao de uma ordem de exemplo para demonstrar o fluxo completo.
         var publisher = host.Services.GetRequiredService<IRmqPublisher>();
         var order = new OrderCreated(
             OrderId: 1,
@@ -75,7 +75,8 @@ internal static class Program
 
         public Task HandleAsync(OrderCreated message, MessageContext context, CancellationToken cancellationToken)
         {
-            //throw new Exception("Simulated processing failure to demonstrate retry logic.");
+            // 4.1) Exemplo de processamento da ordem recebido pelo consumer.
+            ProcessOrder(message, cancellationToken);
 
             _logger.LogInformation(
                 "Order {OrderId} recebida para customer {CustomerId}. EventId={EventId}, Queue={QueueName}",
@@ -85,6 +86,14 @@ internal static class Program
                 context.QueueName);
 
             return Task.CompletedTask;
+        }
+
+        private static void ProcessOrder(OrderCreated order, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Simulacao de regra de negocio executada pelo handler.
+            _ = order.OrderId;
         }
     }
 }
