@@ -32,6 +32,12 @@ internal static class Program
                 Source = new Uri("/rmq-cloudevents-sample", UriKind.Relative),
                 DefaultType = "com.sample.order.created"
             };
+
+            options.DefaultRetry = new RetryOptions
+            {
+                BackoffType = BackoffType.Exponential,
+                MaxAttempts = 5,
+            };
         });
 
         // 2) Registro do consumer para a queue "orders".
@@ -69,6 +75,8 @@ internal static class Program
 
         public Task HandleAsync(OrderCreated message, MessageContext context, CancellationToken cancellationToken)
         {
+            //throw new Exception("Simulated processing failure to demonstrate retry logic.");
+
             _logger.LogInformation(
                 "Order {OrderId} recebida para customer {CustomerId}. EventId={EventId}, Queue={QueueName}",
                 message.OrderId,

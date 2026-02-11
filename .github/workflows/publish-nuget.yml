@@ -1,0 +1,67 @@
+name: Publish NuGet
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version override (e.g. 1.2.3)"
+        required: false
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Resolve version
+        id: resolve_version
+        run: |
+          VERSION=""
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Unit tests
+        run: dotnet test tests/Rmq.CloudEvents.Tests --no-build -c Release
+
+      - name: Integration tests
+        run: dotnet test tests/Rmq.CloudEvents.IntegrationTests --no-build -c Release
+
+      - name: Pack
+        run: |
+          VERSION="${{ steps.resolve_version.outputs.version }}"
+          if [ -n "${VERSION}" ]; then
+            dotnet pack src/Rmq.CloudEvents --no-build -c Release -o ./artifacts /p:Version="${VERSION}"
+          else
+            dotnet pack src/Rmq.CloudEvents --no-build -c Release -o ./artifacts
+          fi
+
+      - name: Push packages to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "artifacts/*.nupkg" --api-key "${NUGET_API_KEY}" --source "https://api.nuget.org/v3/index.json" --skip-duplicate
+          dotnet nuget push "artifacts/*.snupkg" --api-key "${NUGET_API_KEY}" --source "https://api.nuget.org/v3/index.json" --skip-duplicate

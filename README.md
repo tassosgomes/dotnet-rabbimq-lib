@@ -1,5 +1,10 @@
 # Rmq.CloudEvents
 
+[![CI](https://github.com/tassosgomes/dotnet-rabbimq-lib/actions/workflows/ci.yml/badge.svg)](https://github.com/tassosgomes/dotnet-rabbimq-lib/actions/workflows/ci.yml)
+[![Publish NuGet](https://github.com/tassosgomes/dotnet-rabbimq-lib/actions/workflows/publish-nuget.yml/badge.svg)](https://github.com/tassosgomes/dotnet-rabbimq-lib/actions/workflows/publish-nuget.yml)
+[![NuGet Version](https://img.shields.io/nuget/v/Rmq.CloudEvents)](https://www.nuget.org/packages/Rmq.CloudEvents)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/Rmq.CloudEvents)](https://www.nuget.org/packages/Rmq.CloudEvents)
+
 .NET 8 library for RabbitMQ publishing/consuming with quorum queues, exponential retry, DLQ, and transparent CloudEvents wrapping.
 
 [Leia em Portugues (pt-BR)](README.pt-BR.md)
@@ -132,6 +137,26 @@ Main root object: `RmqOptions`
   - On success: ACK.
   - On final failure: NACK with `requeue: false`, message is routed to DLQ.
 
+## Retry and DLX Flow
+
+The flow below summarizes how publish retry, consumer retry, and DLX/DLQ routing behave together.
+
+```mermaid
+flowchart TD
+    P[Publish request] --> PR{Publish OK?}
+    PR -->|yes| Q[Main queue]
+    PR -->|no| PE[Publish error]
+    Q --> C[Consume message]
+    C --> H{Handler OK?}
+    H -->|yes| A[ACK]
+    H -->|no| R{Retry left?}
+    R -->|yes| RH[Retry handler]
+    RH --> H
+    R -->|no| N[NACK no requeue]
+    N --> X[DLX exchange]
+    X --> D[Queue.dlq]
+```
+
 ## Testing
 
 - Unit tests:
@@ -155,6 +180,22 @@ GitHub Actions workflow is available at `.github/workflows/ci.yml` and runs:
 - unit tests with coverage
 - integration tests
 - pack (on `main`)
+
+## Publish to NuGet
+
+NuGet publishing is automated by `.github/workflows/publish-nuget.yml`.
+
+1. Create a repository secret named `NUGET_API_KEY` with a valid nuget.org API key.
+2. Release with a tag using semantic version prefixed by `v`:
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+3. The workflow builds, tests, packs, and pushes `.nupkg`/`.snupkg` to nuget.org.
+
+You can also run it manually from GitHub Actions (`workflow_dispatch`) and provide an optional `version` override.
 
 ## Sample App
 

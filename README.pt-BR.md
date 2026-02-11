@@ -1,5 +1,10 @@
 # Rmq.CloudEvents
 
+[![CI](https://github.com/tassosgomes/dotnet-rabbimq-lib/actions/workflows/ci.yml/badge.svg)](https://github.com/tassosgomes/dotnet-rabbimq-lib/actions/workflows/ci.yml)
+[![Publicar NuGet](https://github.com/tassosgomes/dotnet-rabbimq-lib/actions/workflows/publish-nuget.yml/badge.svg)](https://github.com/tassosgomes/dotnet-rabbimq-lib/actions/workflows/publish-nuget.yml)
+[![Versao NuGet](https://img.shields.io/nuget/v/Rmq.CloudEvents)](https://www.nuget.org/packages/Rmq.CloudEvents)
+[![Downloads NuGet](https://img.shields.io/nuget/dt/Rmq.CloudEvents)](https://www.nuget.org/packages/Rmq.CloudEvents)
+
 Biblioteca .NET 8 para publicacao e consumo com RabbitMQ usando quorum queues, retry exponencial, DLQ e encapsulamento transparente em CloudEvents.
 
 [Read in English](README.md)
@@ -132,6 +137,26 @@ Objeto raiz: `RmqOptions`
   - Sucesso: ACK.
   - Falha final: NACK com `requeue: false`, roteando para DLQ.
 
+## Fluxo de Retry e DLX
+
+O fluxo abaixo resume como o retry de publicacao, retry do consumer e roteamento para DLX/DLQ funcionam juntos.
+
+```mermaid
+flowchart TD
+    P[Publicar mensagem] --> PR{Publish OK?}
+    PR -->|sim| Q[Queue principal]
+    PR -->|nao| PE[Erro publish]
+    Q --> C[Consumir mensagem]
+    C --> H{Handler OK?}
+    H -->|sim| A[ACK]
+    H -->|nao| R{Retry restante?}
+    R -->|sim| RH[Retry handler]
+    RH --> H
+    R -->|nao| N[NACK sem requeue]
+    N --> X[DLX exchange]
+    X --> D[Queue.dlq]
+```
+
 ## Testes
 
 - Testes unitarios:
@@ -155,6 +180,22 @@ Pipeline em `.github/workflows/ci.yml` com:
 - testes unitarios com cobertura
 - testes de integracao
 - pack (apenas em `main`)
+
+## Publicacao no NuGet
+
+A publicacao no NuGet foi automatizada em `.github/workflows/publish-nuget.yml`.
+
+1. Crie o secret do repositorio chamado `NUGET_API_KEY` com uma chave valida do nuget.org.
+2. Gere uma release por tag semantica com prefixo `v`:
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+3. O workflow executa build, testes, pack e publica `.nupkg`/`.snupkg` no nuget.org.
+
+Tambem e possivel executar manualmente via GitHub Actions (`workflow_dispatch`) e informar um `version` opcional.
 
 ## Sample
 

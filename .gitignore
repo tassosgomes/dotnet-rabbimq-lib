@@ -421,3 +421,6 @@ FodyWeavers.xsd
 bin/
 obj/
 artifacts/
+
+#opencode
+.opencode

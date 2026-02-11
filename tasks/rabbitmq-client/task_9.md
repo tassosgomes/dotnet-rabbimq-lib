@@ -1,4 +1,4 @@
-## status: completed
+## status: pending
 
 <task_context>
 <domain>infra/devops</domain>
