@@ -21,7 +21,7 @@ Registrar os novos componentes via DI (`AddRmqTopicConsumer`), criar testes de i
 - [x] 2.0 QueueManager — DeclareExchangeAndBindingsAsync
 - [x] 3.0 Publisher — PublishToTopicAsync
 - [x] 4.0 MessageContext e RmqAsyncConsumerHandler — Exchange/RoutingKey
-- [ ] 5.0 RmqTopicConsumer — Hosted Service para Topic Exchange
+- [x] 5.0 RmqTopicConsumer — Hosted Service para Topic Exchange
 - [ ] 6.0 DI Extensions — AddRmqTopicConsumer
 - [ ] 7.0 Testes de Integracao e Sample Application
 

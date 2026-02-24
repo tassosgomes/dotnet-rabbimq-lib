@@ -292,6 +292,7 @@ public sealed class RmqAsyncConsumerHandlerTests
         channelMock.Verify(x => x.BasicAckAsync(12, false, It.IsAny<CancellationToken>()), Times.Once);
         channelMock.Verify(x => x.BasicNackAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
+    [Fact]
     public async Task HandleBasicDeliverAsync_ShouldUseMaxAttemptsAsTotalAttempts()
     {
         var channelMock = CreateChannelMock();

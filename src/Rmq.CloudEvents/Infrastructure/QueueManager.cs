@@ -71,4 +71,50 @@ internal sealed class QueueManager : IQueueManager
             arguments: queueArguments,
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
+
+    /// <inheritdoc />
+    public async Task DeclareExchangeAndBindingsAsync(
+        IChannel channel,
+        string exchangeName,
+        string queueName,
+        IReadOnlyList<string> bindingPatterns,
+        QueueOptions queueOptions,
+        ExchangeOptions? exchangeOptions = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentException.ThrowIfNullOrWhiteSpace(exchangeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
+        ArgumentNullException.ThrowIfNull(bindingPatterns);
+
+        if (bindingPatterns.Count == 0)
+        {
+            throw new ArgumentException("At least one binding pattern is required.", nameof(bindingPatterns));
+        }
+
+        // 1. Declarar a Topic Exchange
+        await channel.ExchangeDeclareAsync(
+            exchange: exchangeName,
+            type: ExchangeType.Topic,
+            durable: exchangeOptions?.Durable ?? true,
+            autoDelete: exchangeOptions?.AutoDelete ?? false,
+            arguments: exchangeOptions?.Arguments?.ToDictionary(
+                kvp => kvp.Key, kvp => (object?)kvp.Value),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        // 2. Declarar a queue do consumer com DLQ (reutiliza logica existente)
+        await DeclareQueueWithDlqAsync(channel, queueName, queueOptions, cancellationToken)
+            .ConfigureAwait(false);
+
+        // 3. Bind da queue na exchange para cada pattern
+        foreach (var pattern in bindingPatterns)
+        {
+            await channel.QueueBindAsync(
+                queue: queueName,
+                exchange: exchangeName,
+                routingKey: pattern,
+                arguments: null,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+    }
 }

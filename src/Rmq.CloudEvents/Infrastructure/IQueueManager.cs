@@ -20,4 +20,16 @@ internal interface IQueueManager
         string queueName,
         QueueOptions options,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Declara uma Topic Exchange, a queue do consumer, DLQ e todos os bindings.
+    /// </summary>
+    Task DeclareExchangeAndBindingsAsync(
+        IChannel channel,
+        string exchangeName,
+        string queueName,
+        IReadOnlyList<string> bindingPatterns,
+        QueueOptions queueOptions,
+        ExchangeOptions? exchangeOptions = null,
+        CancellationToken cancellationToken = default);
 }

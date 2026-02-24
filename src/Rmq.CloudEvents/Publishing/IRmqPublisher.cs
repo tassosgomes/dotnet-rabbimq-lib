@@ -29,6 +29,14 @@ public interface IRmqPublisher : IAsyncDisposable
     /// <param name="headers">Headers customizados da mensagem.</param>
     /// <param name="cloudEventType">Tipo do CloudEvent opcional.</param>
     /// <param name="cancellationToken">Token de cancelamento.</param>
+    Task PublishAsync<T>(
+        string queueName,
+        T payload,
+        IDictionary<string, object> headers,
+        string? cloudEventType = null,
+        CancellationToken cancellationToken = default)
+        where T : class;
+
     /// <summary>
     /// Publica um payload em uma Topic Exchange com routing key.
     /// </summary>
