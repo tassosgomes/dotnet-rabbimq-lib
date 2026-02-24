@@ -44,4 +44,16 @@ public sealed class MessageContext
     /// Numero da tentativa atual de processamento.
     /// </summary>
     public int AttemptNumber { get; init; }
+
+    /// <summary>
+    /// Nome da exchange de onde a mensagem foi recebida.
+    /// Vazio para mensagens da default exchange (publish direto em queue).
+    /// </summary>
+    public string ExchangeName { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Routing key original da mensagem.
+    /// Para publish direto em queue, corresponde ao nome da queue.
+    /// </summary>
+    public string RoutingKey { get; init; } = string.Empty;
 }

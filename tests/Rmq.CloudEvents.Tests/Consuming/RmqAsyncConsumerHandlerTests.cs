@@ -163,6 +163,89 @@ public sealed class RmqAsyncConsumerHandlerTests
     }
 
     [Fact]
+    public async Task HandleBasicDeliverAsync_ShouldPassExchangeNameAndRoutingKeyToContext()
+    {
+        var channelMock = CreateChannelMock();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        var payload = new TestPayload(456);
+        var metadata = new CloudEventMetadata("evt-exchange-routing", new Uri("/test-service", UriKind.Relative), "event.test", DateTimeOffset.UtcNow);
+
+        wrapperMock
+            .Setup(x => x.Unwrap<TestPayload>(It.IsAny<ReadOnlyMemory<byte>>()))
+            .Returns((payload, metadata));
+
+        MessageContext? captured = null;
+        var messageHandlerMock = new Mock<IRmqMessageHandler<TestPayload>>();
+        messageHandlerMock
+            .Setup(x => x.HandleAsync(payload, It.IsAny<MessageContext>(), It.IsAny<CancellationToken>()))
+            .Callback<TestPayload, MessageContext, CancellationToken>((_, ctx, _) => captured = ctx)
+            .Returns(Task.CompletedTask);
+
+        var consumer = new RmqAsyncConsumerHandler<TestPayload>(
+            channelMock.Object,
+            messageHandlerMock.Object,
+            wrapperMock.Object,
+            new RetryOptions { MaxAttempts = 1, InitialDelay = TimeSpan.Zero, UseJitter = false },
+            "test-queue",
+            NullLogger.Instance);
+
+        await consumer.HandleBasicDeliverAsync(
+            "tag",
+            15,
+            false,
+            "test-exchange",
+            "test.routing.key",
+            new BasicProperties(),
+            new ReadOnlyMemory<byte>([1]));
+
+        captured.Should().NotBeNull();
+        captured!.ExchangeName.Should().Be("test-exchange");
+        captured.RoutingKey.Should().Be("test.routing.key");
+        captured.QueueName.Should().Be("test-queue");
+    }
+
+    [Fact]
+    public async Task HandleBasicDeliverAsync_ShouldUseEmptyDefaultsForExchangeAndRoutingKey()
+    {
+        var channelMock = CreateChannelMock();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        var payload = new TestPayload(789);
+        var metadata = new CloudEventMetadata("evt-defaults", new Uri("/service", UriKind.Relative), "event.defaults", DateTimeOffset.UtcNow);
+
+        wrapperMock
+            .Setup(x => x.Unwrap<TestPayload>(It.IsAny<ReadOnlyMemory<byte>>()))
+            .Returns((payload, metadata));
+
+        MessageContext? captured = null;
+        var messageHandlerMock = new Mock<IRmqMessageHandler<TestPayload>>();
+        messageHandlerMock
+            .Setup(x => x.HandleAsync(payload, It.IsAny<MessageContext>(), It.IsAny<CancellationToken>()))
+            .Callback<TestPayload, MessageContext, CancellationToken>((_, ctx, _) => captured = ctx)
+            .Returns(Task.CompletedTask);
+
+        var consumer = new RmqAsyncConsumerHandler<TestPayload>(
+            channelMock.Object,
+            messageHandlerMock.Object,
+            wrapperMock.Object,
+            new RetryOptions { MaxAttempts = 1, InitialDelay = TimeSpan.Zero, UseJitter = false },
+            "queue",
+            NullLogger.Instance);
+
+        await consumer.HandleBasicDeliverAsync(
+            "tag",
+            16,
+            false,
+            string.Empty,
+            "direct.routing.key",
+            new BasicProperties(),
+            new ReadOnlyMemory<byte>([1]));
+
+        captured.Should().NotBeNull();
+        captured!.ExchangeName.Should().BeEmpty();
+        captured.RoutingKey.Should().Be("direct.routing.key");
+    }
+
+    [Fact]
     public async Task HandleBasicDeliverAsync_ShouldIncreaseAttemptNumberAcrossRetries()
     {
         var channelMock = CreateChannelMock();
@@ -209,8 +292,6 @@ public sealed class RmqAsyncConsumerHandlerTests
         channelMock.Verify(x => x.BasicAckAsync(12, false, It.IsAny<CancellationToken>()), Times.Once);
         channelMock.Verify(x => x.BasicNackAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
-
-    [Fact]
     public async Task HandleBasicDeliverAsync_ShouldUseMaxAttemptsAsTotalAttempts()
     {
         var channelMock = CreateChannelMock();

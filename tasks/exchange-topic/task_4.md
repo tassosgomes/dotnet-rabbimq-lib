@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 parallelizable: true
 blocked_by: [1.0]
 ---

@@ -72,7 +72,9 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
                         headers,
                         deliveryTag,
                         currentAttempt,
-                        redelivered);
+                        redelivered,
+                        exchange,
+                        routingKey);
 
                     await _handler.HandleAsync(payload, context, ct).ConfigureAwait(false);
                 },
@@ -147,7 +149,9 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
         IReadOnlyDictionary<string, object> headers,
         ulong deliveryTag,
         int currentAttempt,
-        bool redelivered)
+        bool redelivered,
+        string exchange,
+        string routingKey)
     {
         var initialAttempt = redelivered ? 2 : 1;
 
@@ -160,7 +164,9 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
             Headers = headers,
             DeliveryTag = deliveryTag,
             QueueName = _queueName,
-            AttemptNumber = (initialAttempt - 1) + currentAttempt
+            AttemptNumber = (initialAttempt - 1) + currentAttempt,
+            ExchangeName = exchange,
+            RoutingKey = routingKey
         };
     }
 
