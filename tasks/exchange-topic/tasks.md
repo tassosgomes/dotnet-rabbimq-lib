@@ -17,7 +17,7 @@ Registrar os novos componentes via DI (`AddRmqTopicConsumer`), criar testes de i
 
 ## Tarefas
 
-- [ ] 1.0 Modelos de Configuracao (ExchangeOptions, TopicSubscriptionOptions, RmqOptions.Exchanges)
+- [x] 1.0 Modelos de Configuracao (ExchangeOptions, TopicSubscriptionOptions, RmqOptions.Exchanges)
 - [ ] 2.0 QueueManager — DeclareExchangeAndBindingsAsync
 - [ ] 3.0 Publisher — PublishToTopicAsync
 - [ ] 4.0 MessageContext e RmqAsyncConsumerHandler — Exchange/RoutingKey
