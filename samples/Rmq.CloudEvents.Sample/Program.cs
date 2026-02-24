@@ -43,6 +43,14 @@ internal static class Program
         // 2) Registro do consumer para a queue "orders".
         builder.Services.AddRmqConsumer<OrderCreated, OrderCreatedConsumer>("orders");
 
+        // 2b) Registro do consumer para o topic exchange "business-events".
+        builder.Services.AddRmqTopicConsumer<OrderEvent, OrderAuditConsumer>(opts =>
+        {
+            opts.ExchangeName = "business-events";
+            opts.QueueName = "order-audit";
+            opts.BindingPatterns = ["orders.*"];
+        });
+
         using var host = builder.Build();
         await host.StartAsync();
 
@@ -56,6 +64,11 @@ internal static class Program
 
         await publisher.PublishAsync("orders", order);
         Console.WriteLine("Order publicada. Aguarde o consumer processar...");
+
+        // 3b) Publicacao via topic exchange.
+        var orderEvent = new OrderEvent(1, "cust-001", "created");
+        await publisher.PublishToTopicAsync("business-events", "orders.created", orderEvent);
+        Console.WriteLine("OrderEvent publicada via topic exchange. Aguarde o consumer processar...");
 
         await Task.Delay(TimeSpan.FromSeconds(3));
         await host.StopAsync();
@@ -94,6 +107,30 @@ internal static class Program
 
             // Simulacao de regra de negocio executada pelo handler.
             _ = order.OrderId;
+        }
+    }
+
+    private sealed record OrderEvent(int OrderId, string CustomerId, string Action);
+
+    private sealed class OrderAuditConsumer : IRmqMessageHandler<OrderEvent>
+    {
+        private readonly ILogger<OrderAuditConsumer> _logger;
+
+        public OrderAuditConsumer(ILogger<OrderAuditConsumer> logger)
+        {
+            _logger = logger;
+        }
+
+        public Task HandleAsync(OrderEvent message, MessageContext context, CancellationToken cancellationToken)
+        {
+            _logger.LogInformation(
+                "Audit: Order {OrderId} action={Action}, Exchange={Exchange}, RoutingKey={RoutingKey}",
+                message.OrderId,
+                message.Action,
+                context.ExchangeName,
+                context.RoutingKey);
+
+            return Task.CompletedTask;
         }
     }
 }

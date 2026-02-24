@@ -23,7 +23,7 @@ Registrar os novos componentes via DI (`AddRmqTopicConsumer`), criar testes de i
 - [x] 4.0 MessageContext e RmqAsyncConsumerHandler — Exchange/RoutingKey
 - [x] 5.0 RmqTopicConsumer — Hosted Service para Topic Exchange
 - [x] 6.0 DI Extensions — AddRmqTopicConsumer
-- [ ] 7.0 Testes de Integracao e Sample Application
+- [x] 7.0 Testes de Integracao e Sample Application
 
 ## Analise de Paralelizacao
 
