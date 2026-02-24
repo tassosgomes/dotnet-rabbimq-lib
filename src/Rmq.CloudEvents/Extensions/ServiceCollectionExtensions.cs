@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Rmq.CloudEvents.CloudEvents;
 using Rmq.CloudEvents.Configuration;
@@ -70,6 +71,51 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<RmqOptions>(),
                 queueName,
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<RmqConsumer<TMessage>>>()));
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registra um consumer inscrito em um Topic Exchange.
+    /// </summary>
+    /// <typeparam name="TMessage">Tipo da mensagem.</typeparam>
+    /// <typeparam name="THandler">Tipo do handler.</typeparam>
+    /// <param name="services">Colecao de servicos.</param>
+    /// <param name="configure">Delegate de configuracao da subscription.</param>
+    /// <returns>A propria colecao para encadeamento.</returns>
+    public static IServiceCollection AddRmqTopicConsumer<TMessage, THandler>(
+        this IServiceCollection services,
+        Action<TopicSubscriptionOptions> configure)
+        where TMessage : class
+        where THandler : class, IRmqMessageHandler<TMessage>
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var subscription = new TopicSubscriptionOptions
+        {
+            ExchangeName = null!,
+            BindingPatterns = null!
+        };
+        configure(subscription);
+
+        if (string.IsNullOrWhiteSpace(subscription.ExchangeName))
+            throw new ArgumentException("ExchangeName is required.", nameof(configure));
+        if (subscription.BindingPatterns is null || subscription.BindingPatterns.Count == 0)
+            throw new ArgumentException("At least one binding pattern is required.", nameof(configure));
+        if (string.IsNullOrWhiteSpace(subscription.QueueName))
+            throw new ArgumentException("QueueName is required for durable topic consumers.", nameof(configure));
+
+        services.AddTransient<IRmqMessageHandler<TMessage>, THandler>();
+        services.AddHostedService(sp =>
+            new RmqTopicConsumer<TMessage>(
+                sp.GetRequiredService<IRmqConnectionManager>(),
+                sp.GetRequiredService<IQueueManager>(),
+                sp.GetRequiredService<ICloudEventWrapper>(),
+                sp.GetRequiredService<IRmqMessageHandler<TMessage>>(),
+                sp.GetRequiredService<RmqOptions>(),
+                subscription,
+                sp.GetService<ILogger<RmqTopicConsumer<TMessage>>>()));
 
         return services;
     }
