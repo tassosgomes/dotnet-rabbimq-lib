@@ -143,6 +143,81 @@ public sealed class RmqPublisherTests
         properties.Headers!["x-retry"].Should().Be(3);
     }
 
+    [Fact]
+    public async Task PublishToTopicAsync_ShouldPublishCloudEventWithPersistentDelivery()
+    {
+        var channelMock = CreateChannelMock();
+        channelMock.Setup(x => x.ExchangeDeclareAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<IDictionary<string, object?>>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+
+        var connectionManagerMock = new Mock<IRmqConnectionManager>();
+        connectionManagerMock.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+
+        var queueManagerMock = new Mock<IQueueManager>();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        var body = new ReadOnlyMemory<byte>([1, 2, 3]);
+        wrapperMock.Setup(x => x.Wrap(It.IsAny<SamplePayload>(), It.IsAny<string?>())).Returns(body);
+
+        var publisher = CreatePublisher(connectionManagerMock, queueManagerMock, wrapperMock);
+
+        await publisher.PublishToTopicAsync("orders-exchange", "orders.create", new SamplePayload(123));
+
+        var publishInvocation = channelMock.Invocations.Single(x => x.Method.Name == nameof(IChannel.BasicPublishAsync));
+        publishInvocation.Arguments[0].Should().Be("orders-exchange");
+        publishInvocation.Arguments[1].Should().Be("orders.create");
+        publishInvocation.Arguments[2].Should().Be(false);
+
+        var properties = publishInvocation.Arguments[3].Should().BeAssignableTo<BasicProperties>().Subject;
+        properties.ContentType.Should().Be("application/cloudevents+json");
+        properties.DeliveryMode.Should().Be(DeliveryModes.Persistent);
+
+        var publishedBody = publishInvocation.Arguments[4].Should().BeOfType<ReadOnlyMemory<byte>>().Subject;
+        publishedBody.ToArray().Should().Equal(body.ToArray());
+    }
+
+    [Fact]
+    public async Task PublishToTopicAsync_ShouldDeclareExchangeAsTopic()
+    {
+        var channelMock = CreateChannelMock();
+        channelMock.Setup(x => x.ExchangeDeclareAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<IDictionary<string, object?>>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+
+        var connectionManagerMock = new Mock<IRmqConnectionManager>();
+        connectionManagerMock.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+
+        var queueManagerMock = new Mock<IQueueManager>();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        wrapperMock.Setup(x => x.Wrap(It.IsAny<SamplePayload>(), It.IsAny<string?>())).Returns(new ReadOnlyMemory<byte>([1]));
+
+        var publisher = CreatePublisher(connectionManagerMock, queueManagerMock, wrapperMock);
+
+        await publisher.PublishToTopicAsync("orders-exchange", "orders.create", new SamplePayload(123));
+
+        channelMock.Verify(x => x.ExchangeDeclareAsync(
+            "orders-exchange",
+            "topic",
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<IDictionary<string, object?>>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     private static RmqPublisher CreatePublisher(
         Mock<IRmqConnectionManager> connectionManagerMock,
         Mock<IQueueManager> queueManagerMock,

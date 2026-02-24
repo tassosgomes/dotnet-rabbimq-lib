@@ -24,4 +24,9 @@ public sealed class RmqOptions
     /// Configuracoes especificas por queue.
     /// </summary>
     public Dictionary<string, QueueOptions> Queues { get; set; } = new();
+
+    /// <summary>
+    /// Configuracoes especificas por exchange.
+    /// </summary>
+    public Dictionary<string, ExchangeOptions> Exchanges { get; set; } = new();
 }

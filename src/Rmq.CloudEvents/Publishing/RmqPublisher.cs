@@ -24,6 +24,7 @@ internal sealed class RmqPublisher : IRmqPublisher
     private readonly ILogger<RmqPublisher> _logger;
     private readonly SemaphoreSlim _channelLock = new(1, 1);
     private readonly HashSet<string> _declaredQueues = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _declaredExchanges = new(StringComparer.Ordinal);
     private IChannel? _channel;
 
     /// <summary>
@@ -65,6 +66,32 @@ internal sealed class RmqPublisher : IRmqPublisher
     {
         ArgumentNullException.ThrowIfNull(headers);
         return PublishInternalAsync(queueName, payload, headers, cloudEventType, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task PublishToTopicAsync<T>(
+        string exchangeName,
+        string routingKey,
+        T payload,
+        string? cloudEventType = null,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        return PublishToTopicInternalAsync(exchangeName, routingKey, payload, headers: null, cloudEventType, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task PublishToTopicAsync<T>(
+        string exchangeName,
+        string routingKey,
+        T payload,
+        IDictionary<string, object> headers,
+        string? cloudEventType = null,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(headers);
+        return PublishToTopicInternalAsync(exchangeName, routingKey, payload, headers, cloudEventType, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -126,6 +153,57 @@ internal sealed class RmqPublisher : IRmqPublisher
         {
             _logger.LogError(ex, "Falha ao publicar mensagem na queue {QueueName} apos retries", queueName);
             throw new RmqPublishException(queueName, queueOptions.Retry.MaxAttempts, ex);
+        }
+    }
+
+    private async Task PublishToTopicInternalAsync<T>(
+        string exchangeName,
+        string routingKey,
+        T payload,
+        IDictionary<string, object>? headers,
+        string? cloudEventType,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(exchangeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(routingKey);
+        ArgumentNullException.ThrowIfNull(payload);
+
+        await EnsureChannelAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureExchangeDeclaredAsync(exchangeName, cancellationToken).ConfigureAwait(false);
+
+        var body = _cloudEventWrapper.Wrap(payload, cloudEventType);
+        var retryPipeline = BuildRetryPipeline(_options.DefaultRetry, _logger);
+
+        try
+        {
+            await retryPipeline.ExecuteAsync(async ct =>
+            {
+                var properties = new BasicProperties
+                {
+                    ContentType = "application/cloudevents+json",
+                    DeliveryMode = DeliveryModes.Persistent,
+                    MessageId = Guid.NewGuid().ToString(),
+                    Headers = headers is null
+                        ? null
+                        : headers.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value)
+                };
+
+                await _channel!.BasicPublishAsync(
+                    exchange: exchangeName,
+                    routingKey: routingKey,
+                    mandatory: false,
+                    basicProperties: properties,
+                    body: body,
+                    cancellationToken: ct).ConfigureAwait(false);
+
+                _logger.LogDebug("Mensagem publicada com sucesso na exchange {ExchangeName} com routing key {RoutingKey}", exchangeName, routingKey);
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Falha ao publicar mensagem na exchange {ExchangeName} com routing key {RoutingKey} apos retries", exchangeName, routingKey);
+            throw new RmqPublishException($"{exchangeName}/{routingKey}", _options.DefaultRetry.MaxAttempts, ex);
         }
     }
 
@@ -236,5 +314,38 @@ internal sealed class RmqPublisher : IRmqPublisher
             BackoffType.Constant => DelayBackoffType.Constant,
             _ => DelayBackoffType.Exponential
         };
+    }
+
+    private async Task EnsureExchangeDeclaredAsync(string exchangeName, CancellationToken cancellationToken)
+    {
+        if (_declaredExchanges.Contains(exchangeName))
+        {
+            return;
+        }
+
+        await _channelLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_declaredExchanges.Contains(exchangeName))
+            {
+                return;
+            }
+
+            var opts = _options.Exchanges.TryGetValue(exchangeName, out var o) ? o : new ExchangeOptions { Name = exchangeName };
+
+            await _channel!.ExchangeDeclareAsync(
+                exchange: exchangeName,
+                type: ExchangeType.Topic,
+                durable: opts.Durable,
+                autoDelete: opts.AutoDelete,
+                arguments: opts.Arguments?.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value),
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            _declaredExchanges.Add(exchangeName);
+        }
+        finally
+        {
+            _channelLock.Release();
+        }
     }
 }

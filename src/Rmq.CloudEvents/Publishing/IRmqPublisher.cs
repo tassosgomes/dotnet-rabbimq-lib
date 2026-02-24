@@ -29,8 +29,36 @@ public interface IRmqPublisher : IAsyncDisposable
     /// <param name="headers">Headers customizados da mensagem.</param>
     /// <param name="cloudEventType">Tipo do CloudEvent opcional.</param>
     /// <param name="cancellationToken">Token de cancelamento.</param>
-    Task PublishAsync<T>(
-        string queueName,
+    /// <summary>
+    /// Publica um payload em uma Topic Exchange com routing key.
+    /// </summary>
+    /// <typeparam name="T">Tipo do payload.</typeparam>
+    /// <param name="exchangeName">Nome da exchange topic.</param>
+    /// <param name="routingKey">Routing key para o publish.</param>
+    /// <param name="payload">Payload a publicar.</param>
+    /// <param name="cloudEventType">Tipo do CloudEvent opcional.</param>
+    /// <param name="cancellationToken">Token de cancelamento.</param>
+    Task PublishToTopicAsync<T>(
+        string exchangeName,
+        string routingKey,
+        T payload,
+        string? cloudEventType = null,
+        CancellationToken cancellationToken = default)
+        where T : class;
+
+    /// <summary>
+    /// Publica um payload em uma Topic Exchange com routing key e headers customizados.
+    /// </summary>
+    /// <typeparam name="T">Tipo do payload.</typeparam>
+    /// <param name="exchangeName">Nome da exchange topic.</param>
+    /// <param name="routingKey">Routing key para o publish.</param>
+    /// <param name="payload">Payload a publicar.</param>
+    /// <param name="headers">Headers customizados da mensagem.</param>
+    /// <param name="cloudEventType">Tipo do CloudEvent opcional.</param>
+    /// <param name="cancellationToken">Token de cancelamento.</param>
+    Task PublishToTopicAsync<T>(
+        string exchangeName,
+        string routingKey,
         T payload,
         IDictionary<string, object> headers,
         string? cloudEventType = null,
