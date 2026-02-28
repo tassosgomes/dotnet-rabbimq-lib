@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DotNet.Testcontainers.Containers;
 using RabbitMQ.Client;
 using Testcontainers.RabbitMq;
 using Xunit;
@@ -12,8 +13,8 @@ public sealed class RabbitMqFixture : IAsyncLifetime
 {
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly RabbitMqContainer? _container;
-    private readonly HttpClient? _managementClient;
-    private readonly Uri? _managementBaseUri;
+    private HttpClient? _managementClient;
+    private Uri? _managementBaseUri;
     private readonly bool _useRemoteBroker;
     private string? _connectionString;
 
@@ -55,7 +56,7 @@ public sealed class RabbitMqFixture : IAsyncLifetime
             }
 
             await _container!.StartAsync().ConfigureAwait(false);
-            _connectionString = _container.GetConnectionString();
+            RefreshLocalEndpoints();
             await WaitUntilReadyAsync().ConfigureAwait(false);
         }
         finally
@@ -95,6 +96,7 @@ public sealed class RabbitMqFixture : IAsyncLifetime
 
             await _container!.StopAsync().ConfigureAwait(false);
             await _container.StartAsync().ConfigureAwait(false);
+            RefreshLocalEndpoints();
             await WaitUntilReadyAsync().ConfigureAwait(false);
         }
         finally
@@ -247,6 +249,25 @@ public sealed class RabbitMqFixture : IAsyncLifetime
         var credentials = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{user}:{pass}"));
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
         return client;
+    }
+
+    private void RefreshLocalEndpoints()
+    {
+        _connectionString = _container!.GetConnectionString();
+
+        _managementClient?.Dispose();
+        _managementClient = null;
+        _managementBaseUri = null;
+
+        try
+        {
+            _managementBaseUri = new Uri($"http://127.0.0.1:{_container.GetMappedPublicPort(15672)}/");
+            _managementClient = CreateManagementClient(_managementBaseUri, "guest", "guest");
+        }
+        catch (InvalidOperationException)
+        {
+            // Local fixture may expose only AMQP; management API remains optional.
+        }
     }
 
     private sealed record ManagementConnection(string Name, string ClientProvidedName);

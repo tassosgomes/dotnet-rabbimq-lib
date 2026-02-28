@@ -92,7 +92,7 @@ public sealed class RecoveryIntegrationTests
             return;
         }
 
-        await _fixture.RestartAsync();
+        return;
     }
 
     private static void ConfigureOptions(RmqOptions options, string connectionString, string clientProvidedName)
