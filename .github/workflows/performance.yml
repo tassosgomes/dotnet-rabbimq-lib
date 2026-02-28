@@ -1,0 +1,67 @@
+name: Performance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  performance:
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          global-json-file: global.json
+
+      - name: Restore benchmarks
+        run: dotnet restore benchmarks/Rmq.CloudEvents.Benchmarks/Rmq.CloudEvents.Benchmarks.csproj
+
+      - name: Restore performance tests
+        run: dotnet restore tests/Rmq.CloudEvents.PerformanceTests/Rmq.CloudEvents.PerformanceTests.csproj
+
+      - name: Build benchmarks
+        run: dotnet build benchmarks/Rmq.CloudEvents.Benchmarks/Rmq.CloudEvents.Benchmarks.csproj --no-restore -c Release
+
+      - name: Build performance tests
+        run: dotnet build tests/Rmq.CloudEvents.PerformanceTests/Rmq.CloudEvents.PerformanceTests.csproj --no-restore -c Release
+
+      - name: Run microbenchmarks
+        run: dotnet run -c Release --project benchmarks/Rmq.CloudEvents.Benchmarks -- --exporters json markdown
+
+      - name: Run performance scenarios
+        env:
+          PERF_RESULTS_DIR: ${{ github.workspace }}/artifacts/performance
+        run: dotnet test tests/Rmq.CloudEvents.PerformanceTests --no-build -c Release
+
+      - name: Publish summary
+        run: |
+          if [ -f artifacts/performance/performance-summary.md ]; then
+            cat artifacts/performance/performance-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: BenchmarkDotNet.Artifacts/**
+          if-no-files-found: warn
+
+      - name: Upload performance artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results
+          path: artifacts/performance/**
+          if-no-files-found: error
