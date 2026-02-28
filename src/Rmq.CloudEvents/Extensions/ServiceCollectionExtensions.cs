@@ -61,13 +61,14 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
 
-        services.AddTransient<IRmqMessageHandler<TMessage>, THandler>();
+        services.AddTransient<THandler>();
+        services.AddTransient<IRmqMessageHandler<TMessage>>(sp => sp.GetRequiredService<THandler>());
         services.AddHostedService(sp =>
             new RmqConsumer<TMessage>(
                 sp.GetRequiredService<IRmqConnectionManager>(),
                 sp.GetRequiredService<IQueueManager>(),
                 sp.GetRequiredService<ICloudEventWrapper>(),
-                sp.GetRequiredService<IRmqMessageHandler<TMessage>>(),
+                CreateScopedHandlerInvoker<TMessage, THandler>(sp),
                 sp.GetRequiredService<RmqOptions>(),
                 queueName,
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<RmqConsumer<TMessage>>>()));
@@ -106,17 +107,33 @@ public static class ServiceCollectionExtensions
         if (string.IsNullOrWhiteSpace(subscription.QueueName))
             throw new ArgumentException("QueueName is required for durable topic consumers.", nameof(configure));
 
-        services.AddTransient<IRmqMessageHandler<TMessage>, THandler>();
+        services.AddTransient<THandler>();
+        services.AddTransient<IRmqMessageHandler<TMessage>>(sp => sp.GetRequiredService<THandler>());
         services.AddHostedService(sp =>
             new RmqTopicConsumer<TMessage>(
                 sp.GetRequiredService<IRmqConnectionManager>(),
                 sp.GetRequiredService<IQueueManager>(),
                 sp.GetRequiredService<ICloudEventWrapper>(),
-                sp.GetRequiredService<IRmqMessageHandler<TMessage>>(),
+                CreateScopedHandlerInvoker<TMessage, THandler>(sp),
                 sp.GetRequiredService<RmqOptions>(),
                 subscription,
                 sp.GetService<ILogger<RmqTopicConsumer<TMessage>>>()));
 
         return services;
+    }
+
+    private static Func<TMessage, MessageContext, CancellationToken, Task> CreateScopedHandlerInvoker<TMessage, THandler>(
+        IServiceProvider serviceProvider)
+        where TMessage : class
+        where THandler : class, IRmqMessageHandler<TMessage>
+    {
+        var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
+
+        return async (message, context, cancellationToken) =>
+        {
+            using var scope = scopeFactory.CreateScope();
+            var handler = scope.ServiceProvider.GetRequiredService<THandler>();
+            await handler.HandleAsync(message, context, cancellationToken).ConfigureAwait(false);
+        };
     }
 }

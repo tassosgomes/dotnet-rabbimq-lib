@@ -23,7 +23,7 @@ public sealed class RmqAsyncConsumerHandlerTests
         var messageHandlerMock = new Mock<IRmqMessageHandler<TestPayload>>();
         var consumer = new RmqAsyncConsumerHandler<TestPayload>(
             channelMock.Object,
-            messageHandlerMock.Object,
+            messageHandlerMock.Object.HandleAsync,
             wrapperMock.Object,
             new RetryOptions { MaxAttempts = 1, InitialDelay = TimeSpan.Zero, UseJitter = false },
             "orders",
@@ -58,7 +58,7 @@ public sealed class RmqAsyncConsumerHandlerTests
 
         var consumer = new RmqAsyncConsumerHandler<TestPayload>(
             channelMock.Object,
-            messageHandlerMock.Object,
+            messageHandlerMock.Object.HandleAsync,
             wrapperMock.Object,
             new RetryOptions { MaxAttempts = 1, InitialDelay = TimeSpan.Zero, UseJitter = false },
             "orders",
@@ -96,7 +96,7 @@ public sealed class RmqAsyncConsumerHandlerTests
 
         var consumer = new RmqAsyncConsumerHandler<TestPayload>(
             channelMock.Object,
-            messageHandlerMock.Object,
+            messageHandlerMock.Object.HandleAsync,
             wrapperMock.Object,
             new RetryOptions { MaxAttempts = 3, InitialDelay = TimeSpan.Zero, UseJitter = false },
             "orders",
@@ -144,7 +144,7 @@ public sealed class RmqAsyncConsumerHandlerTests
 
         var consumer = new RmqAsyncConsumerHandler<TestPayload>(
             channelMock.Object,
-            messageHandlerMock.Object,
+            messageHandlerMock.Object.HandleAsync,
             wrapperMock.Object,
             new RetryOptions { MaxAttempts = 1, InitialDelay = TimeSpan.Zero, UseJitter = false },
             "orders",
@@ -183,7 +183,7 @@ public sealed class RmqAsyncConsumerHandlerTests
 
         var consumer = new RmqAsyncConsumerHandler<TestPayload>(
             channelMock.Object,
-            messageHandlerMock.Object,
+            messageHandlerMock.Object.HandleAsync,
             wrapperMock.Object,
             new RetryOptions { MaxAttempts = 1, InitialDelay = TimeSpan.Zero, UseJitter = false },
             "test-queue",
@@ -225,7 +225,7 @@ public sealed class RmqAsyncConsumerHandlerTests
 
         var consumer = new RmqAsyncConsumerHandler<TestPayload>(
             channelMock.Object,
-            messageHandlerMock.Object,
+            messageHandlerMock.Object.HandleAsync,
             wrapperMock.Object,
             new RetryOptions { MaxAttempts = 1, InitialDelay = TimeSpan.Zero, UseJitter = false },
             "queue",
@@ -273,7 +273,7 @@ public sealed class RmqAsyncConsumerHandlerTests
 
         var consumer = new RmqAsyncConsumerHandler<TestPayload>(
             channelMock.Object,
-            messageHandlerMock.Object,
+            messageHandlerMock.Object.HandleAsync,
             wrapperMock.Object,
             new RetryOptions { MaxAttempts = 2, InitialDelay = TimeSpan.Zero, UseJitter = false },
             "orders",
@@ -310,7 +310,7 @@ public sealed class RmqAsyncConsumerHandlerTests
 
         var consumer = new RmqAsyncConsumerHandler<TestPayload>(
             channelMock.Object,
-            messageHandlerMock.Object,
+            messageHandlerMock.Object.HandleAsync,
             wrapperMock.Object,
             new RetryOptions { MaxAttempts = 2, InitialDelay = TimeSpan.Zero, UseJitter = false },
             "orders",

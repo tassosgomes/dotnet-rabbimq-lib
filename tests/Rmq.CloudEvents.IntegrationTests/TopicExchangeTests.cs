@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using RabbitMQ.Client;
 using Rmq.CloudEvents.Configuration;
 using Rmq.CloudEvents.Consuming;
+using Rmq.CloudEvents.Exceptions;
 using Rmq.CloudEvents.Extensions;
 using Rmq.CloudEvents.IntegrationTests.Fixtures;
 using Rmq.CloudEvents.Publishing;
@@ -76,7 +77,9 @@ public sealed class TopicExchangeTests
 
         var publisher = provider.GetRequiredService<IRmqPublisher>();
         await publisher.PublishToTopicAsync(exchangeName, "orders.created", new TopicOrder(1, "c1"));
-        await publisher.PublishToTopicAsync(exchangeName, "payments.completed", new TopicOrder(2, "c2"));
+        var unmatchedPublish = () => publisher.PublishToTopicAsync(exchangeName, "payments.completed", new TopicOrder(2, "c2"));
+
+        await unmatchedPublish.Should().ThrowAsync<RmqPublishException>();
 
         await Task.Delay(TimeSpan.FromSeconds(3));
 
@@ -141,7 +144,9 @@ public sealed class TopicExchangeTests
         var publisher = provider.GetRequiredService<IRmqPublisher>();
         await publisher.PublishToTopicAsync(exchangeName, "orders.created", new TopicOrder(1, "c1"));
         await publisher.PublishToTopicAsync(exchangeName, "payments.completed", new TopicOrder(2, "c2"));
-        await publisher.PublishToTopicAsync(exchangeName, "users.deleted", new TopicOrder(3, "c3"));
+        var unmatchedPublish = () => publisher.PublishToTopicAsync(exchangeName, "users.deleted", new TopicOrder(3, "c3"));
+
+        await unmatchedPublish.Should().ThrowAsync<RmqPublishException>();
 
         await Task.Delay(TimeSpan.FromSeconds(3));
 
@@ -252,7 +257,9 @@ public sealed class TopicExchangeTests
         var publisher = provider.GetRequiredService<IRmqPublisher>();
         await publisher.PublishToTopicAsync(exchangeName, "orders.created", new TopicOrder(101, "customer-101"));
         await publisher.PublishToTopicAsync(exchangeName, "payments.completed", new TopicPayment(501, "paid"));
-        await publisher.PublishToTopicAsync(exchangeName, "users.updated", new TopicOrder(999, "ignored"));
+        var unmatchedPublish = () => publisher.PublishToTopicAsync(exchangeName, "users.updated", new TopicOrder(999, "ignored"));
+
+        await unmatchedPublish.Should().ThrowAsync<RmqPublishException>();
 
         await Task.Delay(TimeSpan.FromSeconds(3));
 

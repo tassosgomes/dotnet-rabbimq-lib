@@ -100,4 +100,31 @@ public sealed class QueueManagerTests
         mainArgs["x-dead-letter-routing-key"].Should().Be("billing");
         mainArgs["x-delivery-limit"].Should().Be(5);
     }
+
+    [Fact]
+    public async Task DeclareQueueWithDlqAsync_ShouldNotDeclareDlqTopology_WhenDisabled()
+    {
+        var channelMock = new Mock<IChannel>();
+        var manager = new QueueManager();
+        var options = new QueueOptions
+        {
+            Dlq = new DlqOptions
+            {
+                Enabled = false,
+                QueueNameSuffix = ".dlq"
+            }
+        };
+
+        await manager.DeclareQueueWithDlqAsync(channelMock.Object, "invoices", options);
+
+        channelMock.Invocations.Count(x => x.Method.Name == nameof(IChannel.ExchangeDeclareAsync)).Should().Be(0);
+        channelMock.Invocations.Count(x => x.Method.Name == nameof(IChannel.QueueBindAsync)).Should().Be(0);
+        channelMock.Invocations.Count(x => x.Method.Name == nameof(IChannel.QueueDeclareAsync)).Should().Be(1);
+
+        var mainDeclare = channelMock.Invocations.Single(x => x.Method.Name == nameof(IChannel.QueueDeclareAsync));
+        var mainArgs = mainDeclare.Arguments[4] as IDictionary<string, object?>;
+        mainArgs.Should().NotBeNull();
+        mainArgs!.ContainsKey("x-dead-letter-exchange").Should().BeFalse();
+        mainArgs.ContainsKey("x-dead-letter-routing-key").Should().BeFalse();
+    }
 }

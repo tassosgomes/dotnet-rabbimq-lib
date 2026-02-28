@@ -19,7 +19,7 @@ internal sealed class RmqConsumer<T> : IHostedService, IRmqConsumer
     private readonly IRmqConnectionManager _connectionManager;
     private readonly IQueueManager _queueManager;
     private readonly ICloudEventWrapper _cloudEventWrapper;
-    private readonly IRmqMessageHandler<T> _messageHandler;
+    private readonly Func<T, MessageContext, CancellationToken, Task> _messageHandlerInvoker;
     private readonly RmqOptions _options;
     private readonly string _queueName;
     private readonly ILogger<RmqConsumer<T>> _logger;
@@ -35,7 +35,7 @@ internal sealed class RmqConsumer<T> : IHostedService, IRmqConsumer
         IRmqConnectionManager connectionManager,
         IQueueManager queueManager,
         ICloudEventWrapper cloudEventWrapper,
-        IRmqMessageHandler<T> messageHandler,
+        Func<T, MessageContext, CancellationToken, Task> messageHandlerInvoker,
         RmqOptions options,
         string queueName,
         ILogger<RmqConsumer<T>>? logger = null)
@@ -43,7 +43,7 @@ internal sealed class RmqConsumer<T> : IHostedService, IRmqConsumer
         _connectionManager = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
         _queueManager = queueManager ?? throw new ArgumentNullException(nameof(queueManager));
         _cloudEventWrapper = cloudEventWrapper ?? throw new ArgumentNullException(nameof(cloudEventWrapper));
-        _messageHandler = messageHandler ?? throw new ArgumentNullException(nameof(messageHandler));
+        _messageHandlerInvoker = messageHandlerInvoker ?? throw new ArgumentNullException(nameof(messageHandlerInvoker));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _queueName = string.IsNullOrWhiteSpace(queueName)
             ? throw new ArgumentException("Queue name must be provided.", nameof(queueName))
@@ -68,9 +68,14 @@ internal sealed class RmqConsumer<T> : IHostedService, IRmqConsumer
             var queueOptions = GetQueueOptions(_queueName);
             await _queueManager.DeclareQueueWithDlqAsync(channel, _queueName, queueOptions, cancellationToken).ConfigureAwait(false);
 
+            if (queueOptions.PrefetchCount > 0)
+            {
+                await channel.BasicQosAsync(0, queueOptions.PrefetchCount, false, cancellationToken).ConfigureAwait(false);
+            }
+
             var consumerHandler = new RmqAsyncConsumerHandler<T>(
                 channel,
-                _messageHandler,
+                _messageHandlerInvoker,
                 _cloudEventWrapper,
                 queueOptions.Retry,
                 _queueName,
@@ -156,12 +161,18 @@ internal sealed class RmqConsumer<T> : IHostedService, IRmqConsumer
 
         return new QueueOptions
         {
+            PrefetchCount = 0,
             Retry = new RetryOptions
             {
                 MaxAttempts = _options.DefaultRetry.MaxAttempts,
                 InitialDelay = _options.DefaultRetry.InitialDelay,
                 BackoffType = _options.DefaultRetry.BackoffType,
                 UseJitter = _options.DefaultRetry.UseJitter
+            },
+            Dlq = new DlqOptions
+            {
+                Enabled = true,
+                QueueNameSuffix = ".dlq"
             }
         };
     }

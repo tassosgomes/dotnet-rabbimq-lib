@@ -21,6 +21,11 @@ public sealed class RmqOptions
     public RetryOptions DefaultRetry { get; set; } = new();
 
     /// <summary>
+    /// Timeout maximo para aguardar confirmacao de publish do broker.
+    /// </summary>
+    public TimeSpan PublishConfirmTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Configuracoes especificas por queue.
     /// </summary>
     public Dictionary<string, QueueOptions> Queues { get; set; } = new();

@@ -20,4 +20,11 @@ internal interface IRmqConnectionManager : IAsyncDisposable
     /// <param name="cancellationToken">Token de cancelamento.</param>
     /// <returns>Canal AMQP.</returns>
     Task<IChannel> CreateChannelAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cria um canal configurado para publish com confirmacoes do broker.
+    /// </summary>
+    /// <param name="cancellationToken">Token de cancelamento.</param>
+    /// <returns>Canal AMQP com publisher confirms habilitado.</returns>
+    Task<IChannel> CreatePublisherChannelAsync(CancellationToken cancellationToken = default);
 }

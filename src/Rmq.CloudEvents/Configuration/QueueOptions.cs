@@ -6,6 +6,12 @@ namespace Rmq.CloudEvents.Configuration;
 public sealed class QueueOptions
 {
     /// <summary>
+    /// Quantidade maxima de mensagens entregues sem ACK por consumer.
+    /// Zero delega o comportamento ao broker.
+    /// </summary>
+    public ushort PrefetchCount { get; set; } = 0;
+
+    /// <summary>
     /// Tamanho inicial do grupo quorum (0 usa default do RabbitMQ).
     /// </summary>
     public int QuorumSize { get; set; } = 0;

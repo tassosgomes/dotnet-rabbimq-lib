@@ -24,8 +24,11 @@ public sealed class ServiceCollectionExtensionsTopicTests
         });
 
         services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(TestMessageHandler)
+            && descriptor.Lifetime == ServiceLifetime.Transient);
+
+        services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IRmqMessageHandler<TestMessage>)
-            && descriptor.ImplementationType == typeof(TestMessageHandler)
             && descriptor.Lifetime == ServiceLifetime.Transient);
     }
 

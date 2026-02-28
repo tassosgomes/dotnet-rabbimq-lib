@@ -82,6 +82,18 @@ internal sealed class RmqConnectionManager : IRmqConnectionManager
     }
 
     /// <inheritdoc />
+    public async Task<IChannel> CreatePublisherChannelAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = await GetConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.CreateChannelAsync(
+            new CreateChannelOptions(
+                publisherConfirmationsEnabled: true,
+                publisherConfirmationTrackingEnabled: true,
+                outstandingPublisherConfirmationsRateLimiter: null),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         if (_connection is not null)

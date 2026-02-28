@@ -32,7 +32,7 @@ internal sealed class CloudEventWrapper : ICloudEventWrapper
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        var cloudEvent = new CloudNative.CloudEvents.CloudEvent(CloudEventsSpecVersion.V1_0)
+        var cloudEvent = new CloudNative.CloudEvents.CloudEvent(GetSpecVersion())
         {
             Id = Guid.NewGuid().ToString(),
             Source = _options.Source,
@@ -73,5 +73,15 @@ internal sealed class CloudEventWrapper : ICloudEventWrapper
             Timestamp: cloudEvent.Time ?? DateTimeOffset.UtcNow);
 
         return (payload, metadata);
+    }
+
+    private CloudEventsSpecVersion GetSpecVersion()
+    {
+        return _options.SpecVersion switch
+        {
+            "1.0" => CloudEventsSpecVersion.V1_0,
+            _ => throw new NotSupportedException(
+                $"CloudEvents spec version '{_options.SpecVersion}' is not supported. Supported versions: 1.0.")
+        };
     }
 }

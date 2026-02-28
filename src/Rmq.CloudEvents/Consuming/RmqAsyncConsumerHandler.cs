@@ -15,8 +15,8 @@ namespace Rmq.CloudEvents.Consuming;
 internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
     where T : class
 {
-    private readonly IRmqMessageHandler<T> _handler;
     private readonly ICloudEventWrapper _cloudEventWrapper;
+    private readonly Func<T, MessageContext, CancellationToken, Task> _handleMessageAsync;
     private readonly ResiliencePipeline _retryPipeline;
     private readonly string _queueName;
     private readonly ILogger _logger;
@@ -26,14 +26,14 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
     /// </summary>
     public RmqAsyncConsumerHandler(
         IChannel channel,
-        IRmqMessageHandler<T> handler,
+        Func<T, MessageContext, CancellationToken, Task> handleMessageAsync,
         ICloudEventWrapper cloudEventWrapper,
         RetryOptions retryOptions,
         string queueName,
         ILogger? logger = null)
         : base(channel)
     {
-        _handler = handler ?? throw new ArgumentNullException(nameof(handler));
+        _handleMessageAsync = handleMessageAsync ?? throw new ArgumentNullException(nameof(handleMessageAsync));
         _cloudEventWrapper = cloudEventWrapper ?? throw new ArgumentNullException(nameof(cloudEventWrapper));
         _queueName = string.IsNullOrWhiteSpace(queueName)
             ? throw new ArgumentException("Queue name must be provided.", nameof(queueName))
@@ -76,7 +76,7 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
                         exchange,
                         routingKey);
 
-                    await _handler.HandleAsync(payload, context, ct).ConfigureAwait(false);
+                    await _handleMessageAsync(payload, context, ct).ConfigureAwait(false);
                 },
                 cancellationToken).ConfigureAwait(false);
 

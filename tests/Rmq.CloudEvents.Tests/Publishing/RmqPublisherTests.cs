@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using Rmq.CloudEvents.CloudEvents;
 using Rmq.CloudEvents.Configuration;
 using Rmq.CloudEvents.Connection;
@@ -19,7 +20,7 @@ public sealed class RmqPublisherTests
     {
         var channelMock = CreateChannelMock();
         var connectionManagerMock = new Mock<IRmqConnectionManager>();
-        connectionManagerMock.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+        connectionManagerMock.Setup(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
 
         var queueManagerMock = new Mock<IQueueManager>();
         var wrapperMock = new Mock<ICloudEventWrapper>();
@@ -53,17 +54,19 @@ public sealed class RmqPublisherTests
     public async Task PublishAsync_ShouldRetryOnTransientFailure()
     {
         var attempt = 0;
-        var channelMock = CreateChannelMock(() =>
+        var channelMock = CreateChannelMock((ack, _, _, _) =>
         {
             attempt++;
             if (attempt == 1)
             {
                 throw new TimeoutException("transient");
             }
+
+            _ = ack!(new object(), new BasicAckEventArgs(1, false, CancellationToken.None));
         });
 
         var connectionManagerMock = new Mock<IRmqConnectionManager>();
-        connectionManagerMock.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+        connectionManagerMock.Setup(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
 
         var queueManagerMock = new Mock<IQueueManager>();
         var wrapperMock = new Mock<ICloudEventWrapper>();
@@ -88,10 +91,10 @@ public sealed class RmqPublisherTests
     [Fact]
     public async Task PublishAsync_ShouldThrowRmqPublishException_WhenRetriesExhausted()
     {
-        var channelMock = CreateChannelMock(() => throw new IOException("network error"));
+        var channelMock = CreateChannelMock((_, _, _, _) => throw new IOException("network error"));
 
         var connectionManagerMock = new Mock<IRmqConnectionManager>();
-        connectionManagerMock.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+        connectionManagerMock.Setup(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
 
         var queueManagerMock = new Mock<IQueueManager>();
         var wrapperMock = new Mock<ICloudEventWrapper>();
@@ -113,7 +116,7 @@ public sealed class RmqPublisherTests
         var exception = await action.Should().ThrowAsync<RmqPublishException>();
         exception.Which.QueueName.Should().Be("orders");
         exception.Which.AttemptsExhausted.Should().Be(2);
-        channelMock.Invocations.Count(x => x.Method.Name == nameof(IChannel.BasicPublishAsync)).Should().Be(3);
+        channelMock.Invocations.Count(x => x.Method.Name == nameof(IChannel.BasicPublishAsync)).Should().Be(2);
     }
 
     [Fact]
@@ -121,7 +124,7 @@ public sealed class RmqPublisherTests
     {
         var channelMock = CreateChannelMock();
         var connectionManagerMock = new Mock<IRmqConnectionManager>();
-        connectionManagerMock.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+        connectionManagerMock.Setup(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
 
         var queueManagerMock = new Mock<IQueueManager>();
         var wrapperMock = new Mock<ICloudEventWrapper>();
@@ -158,7 +161,7 @@ public sealed class RmqPublisherTests
             It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
 
         var connectionManagerMock = new Mock<IRmqConnectionManager>();
-        connectionManagerMock.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+        connectionManagerMock.Setup(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
 
         var queueManagerMock = new Mock<IQueueManager>();
         var wrapperMock = new Mock<ICloudEventWrapper>();
@@ -172,7 +175,7 @@ public sealed class RmqPublisherTests
         var publishInvocation = channelMock.Invocations.Single(x => x.Method.Name == nameof(IChannel.BasicPublishAsync));
         publishInvocation.Arguments[0].Should().Be("orders-exchange");
         publishInvocation.Arguments[1].Should().Be("orders.create");
-        publishInvocation.Arguments[2].Should().Be(false);
+        publishInvocation.Arguments[2].Should().Be(true);
 
         var properties = publishInvocation.Arguments[3].Should().BeAssignableTo<BasicProperties>().Subject;
         properties.ContentType.Should().Be("application/cloudevents+json");
@@ -197,7 +200,7 @@ public sealed class RmqPublisherTests
             It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
 
         var connectionManagerMock = new Mock<IRmqConnectionManager>();
-        connectionManagerMock.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+        connectionManagerMock.Setup(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
 
         var queueManagerMock = new Mock<IQueueManager>();
         var wrapperMock = new Mock<ICloudEventWrapper>();
@@ -218,6 +221,107 @@ public sealed class RmqPublisherTests
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    [Fact]
+    public async Task PublishAsync_ShouldThrowRmqPublishException_WhenBrokerNacksPublish()
+    {
+        var channelMock = CreateChannelMock((_, nack, _, _) =>
+        {
+            _ = nack!(new object(), new BasicNackEventArgs(1, false, false, CancellationToken.None));
+        });
+        var connectionManagerMock = new Mock<IRmqConnectionManager>();
+        connectionManagerMock.Setup(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+
+        var queueManagerMock = new Mock<IQueueManager>();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        wrapperMock.Setup(x => x.Wrap(It.IsAny<SamplePayload>(), It.IsAny<string?>())).Returns(new ReadOnlyMemory<byte>([1]));
+
+        await using var publisher = new RmqPublisher(
+            connectionManagerMock.Object,
+            queueManagerMock.Object,
+            wrapperMock.Object,
+            CreateOptions(),
+            NullLogger<RmqPublisher>.Instance);
+
+        var action = async () => await publisher.PublishAsync("orders", new SamplePayload(100));
+
+        await action.Should().ThrowAsync<RmqPublishException>();
+    }
+
+    [Fact]
+    public async Task PublishToTopicAsync_ShouldThrowRmqPublishException_WhenBrokerReturnsUnroutableMessage()
+    {
+        var channelMock = CreateChannelMock((_, _, returned, properties) =>
+        {
+            _ = returned!(
+                new object(),
+                new BasicReturnEventArgs(
+                    312,
+                    "NO_ROUTE",
+                    "orders-exchange",
+                    "orders.missing",
+                    properties,
+                    new ReadOnlyMemory<byte>([1]),
+                    CancellationToken.None));
+        });
+        channelMock.Setup(x => x.ExchangeDeclareAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<IDictionary<string, object?>>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+
+        var connectionManagerMock = new Mock<IRmqConnectionManager>();
+        connectionManagerMock.Setup(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+
+        var queueManagerMock = new Mock<IQueueManager>();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        wrapperMock.Setup(x => x.Wrap(It.IsAny<SamplePayload>(), It.IsAny<string?>())).Returns(new ReadOnlyMemory<byte>([1]));
+
+        await using var publisher = new RmqPublisher(
+            connectionManagerMock.Object,
+            queueManagerMock.Object,
+            wrapperMock.Object,
+            CreateOptions(),
+            NullLogger<RmqPublisher>.Instance);
+
+        var action = async () => await publisher.PublishToTopicAsync("orders-exchange", "orders.missing", new SamplePayload(1));
+
+        await action.Should().ThrowAsync<RmqPublishException>();
+    }
+
+    [Fact]
+    public async Task PublishAsync_ShouldThrowRmqPublishException_WhenBrokerConfirmationTimesOut()
+    {
+        var channelMock = CreateChannelMock((_, _, _, _) =>
+        {
+        });
+
+        var connectionManagerMock = new Mock<IRmqConnectionManager>();
+        connectionManagerMock.Setup(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(channelMock.Object);
+
+        var queueManagerMock = new Mock<IQueueManager>();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        wrapperMock.Setup(x => x.Wrap(It.IsAny<SamplePayload>(), It.IsAny<string?>())).Returns(new ReadOnlyMemory<byte>([1]));
+
+        var options = CreateOptions();
+        options.PublishConfirmTimeout = TimeSpan.FromMilliseconds(20);
+
+        await using var publisher = new RmqPublisher(
+            connectionManagerMock.Object,
+            queueManagerMock.Object,
+            wrapperMock.Object,
+            options,
+            NullLogger<RmqPublisher>.Instance);
+
+        var action = async () => await publisher.PublishAsync("orders", new SamplePayload(5));
+
+        var exception = await action.Should().ThrowAsync<RmqPublishException>();
+        exception.Which.InnerException.Should().BeOfType<TimeoutException>();
+    }
+
     private static RmqPublisher CreatePublisher(
         Mock<IRmqConnectionManager> connectionManagerMock,
         Mock<IQueueManager> queueManagerMock,
@@ -231,10 +335,35 @@ public sealed class RmqPublisherTests
             NullLogger<RmqPublisher>.Instance);
     }
 
-    private static Mock<IChannel> CreateChannelMock(Action? publishAction = null)
+    private static Mock<IChannel> CreateChannelMock(
+        Action<
+            AsyncEventHandler<BasicAckEventArgs>?,
+            AsyncEventHandler<BasicNackEventArgs>?,
+            AsyncEventHandler<BasicReturnEventArgs>?,
+            BasicProperties>? publishAction = null)
     {
         var channelMock = new Mock<IChannel>();
         channelMock.SetupGet(x => x.IsOpen).Returns(true);
+
+        AsyncEventHandler<BasicAckEventArgs>? ackHandler = null;
+        AsyncEventHandler<BasicNackEventArgs>? nackHandler = null;
+        AsyncEventHandler<BasicReturnEventArgs>? returnHandler = null;
+
+        channelMock.SetupAdd(x => x.BasicAcksAsync += It.IsAny<AsyncEventHandler<BasicAckEventArgs>>())
+            .Callback<AsyncEventHandler<BasicAckEventArgs>>(handler => ackHandler += handler);
+        channelMock.SetupRemove(x => x.BasicAcksAsync -= It.IsAny<AsyncEventHandler<BasicAckEventArgs>>())
+            .Callback<AsyncEventHandler<BasicAckEventArgs>>(handler => ackHandler -= handler);
+
+        channelMock.SetupAdd(x => x.BasicNacksAsync += It.IsAny<AsyncEventHandler<BasicNackEventArgs>>())
+            .Callback<AsyncEventHandler<BasicNackEventArgs>>(handler => nackHandler += handler);
+        channelMock.SetupRemove(x => x.BasicNacksAsync -= It.IsAny<AsyncEventHandler<BasicNackEventArgs>>())
+            .Callback<AsyncEventHandler<BasicNackEventArgs>>(handler => nackHandler -= handler);
+
+        channelMock.SetupAdd(x => x.BasicReturnAsync += It.IsAny<AsyncEventHandler<BasicReturnEventArgs>>())
+            .Callback<AsyncEventHandler<BasicReturnEventArgs>>(handler => returnHandler += handler);
+        channelMock.SetupRemove(x => x.BasicReturnAsync -= It.IsAny<AsyncEventHandler<BasicReturnEventArgs>>())
+            .Callback<AsyncEventHandler<BasicReturnEventArgs>>(handler => returnHandler -= handler);
+
         channelMock
             .Setup(x => x.BasicPublishAsync(
                 It.IsAny<string>(),
@@ -243,9 +372,15 @@ public sealed class RmqPublisherTests
                 It.IsAny<BasicProperties>(),
                 It.IsAny<ReadOnlyMemory<byte>>(),
                 It.IsAny<CancellationToken>()))
-            .Returns((string _, string _, bool _, BasicProperties _, ReadOnlyMemory<byte> _, CancellationToken _) =>
+            .Returns((string _, string _, bool _, BasicProperties properties, ReadOnlyMemory<byte> _, CancellationToken _) =>
             {
-                publishAction?.Invoke();
+                if (publishAction is null)
+                {
+                    _ = ackHandler!(new object(), new BasicAckEventArgs(1, false, CancellationToken.None));
+                    return ValueTask.CompletedTask;
+                }
+
+                publishAction.Invoke(ackHandler, nackHandler, returnHandler, properties);
                 return ValueTask.CompletedTask;
             });
 

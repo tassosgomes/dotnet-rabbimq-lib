@@ -40,7 +40,7 @@ public sealed class RmqTopicConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             subscription,
             NullLogger<RmqTopicConsumer<TestPayload>>.Instance);
@@ -97,7 +97,7 @@ public sealed class RmqTopicConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             subscription,
             NullLogger<RmqTopicConsumer<TestPayload>>.Instance);
@@ -155,7 +155,7 @@ public sealed class RmqTopicConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             subscription,
             NullLogger<RmqTopicConsumer<TestPayload>>.Instance);
@@ -231,7 +231,7 @@ public sealed class RmqTopicConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             subscription,
             NullLogger<RmqTopicConsumer<TestPayload>>.Instance);
@@ -288,7 +288,7 @@ public sealed class RmqTopicConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             options,
             subscription,
             NullLogger<RmqTopicConsumer<TestPayload>>.Instance);
@@ -334,7 +334,7 @@ public sealed class RmqTopicConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             subscription,
             NullLogger<RmqTopicConsumer<TestPayload>>.Instance);
@@ -363,7 +363,7 @@ public sealed class RmqTopicConsumerTests
                 null!,
                 new Mock<IQueueManager>().Object,
                 new Mock<ICloudEventWrapper>().Object,
-                new Mock<IRmqMessageHandler<TestPayload>>().Object,
+                CreateHandlerInvoker(),
                 new RmqOptions(),
                 new TopicSubscriptionOptions
                 {
@@ -386,7 +386,7 @@ public sealed class RmqTopicConsumerTests
                 new Mock<IRmqConnectionManager>().Object,
                 null!,
                 new Mock<ICloudEventWrapper>().Object,
-                new Mock<IRmqMessageHandler<TestPayload>>().Object,
+                CreateHandlerInvoker(),
                 new RmqOptions(),
                 new TopicSubscriptionOptions
                 {
@@ -409,7 +409,7 @@ public sealed class RmqTopicConsumerTests
                 new Mock<IRmqConnectionManager>().Object,
                 new Mock<IQueueManager>().Object,
                 null!,
-                new Mock<IRmqMessageHandler<TestPayload>>().Object,
+                CreateHandlerInvoker(),
                 new RmqOptions(),
                 new TopicSubscriptionOptions
                 {
@@ -442,7 +442,7 @@ public sealed class RmqTopicConsumerTests
                 });
         });
 
-        exception.ParamName.Should().Be("messageHandler");
+        exception.ParamName.Should().Be("messageHandlerInvoker");
     }
 
     [Fact]
@@ -455,7 +455,7 @@ public sealed class RmqTopicConsumerTests
                 new Mock<IRmqConnectionManager>().Object,
                 new Mock<IQueueManager>().Object,
                 new Mock<ICloudEventWrapper>().Object,
-                new Mock<IRmqMessageHandler<TestPayload>>().Object,
+                CreateHandlerInvoker(),
                 null!,
                 new TopicSubscriptionOptions
                 {
@@ -478,7 +478,7 @@ public sealed class RmqTopicConsumerTests
                 new Mock<IRmqConnectionManager>().Object,
                 new Mock<IQueueManager>().Object,
                 new Mock<ICloudEventWrapper>().Object,
-                new Mock<IRmqMessageHandler<TestPayload>>().Object,
+                CreateHandlerInvoker(),
                 new RmqOptions(),
                 null!);
         });
@@ -513,7 +513,7 @@ public sealed class RmqTopicConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             subscription,
             NullLogger<RmqTopicConsumer<TestPayload>>.Instance);
@@ -580,7 +580,7 @@ public sealed class RmqTopicConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             subscription,
             NullLogger<RmqTopicConsumer<TestPayload>>.Instance);
@@ -625,7 +625,7 @@ public sealed class RmqTopicConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             subscription,
             NullLogger<RmqTopicConsumer<TestPayload>>.Instance);
@@ -664,7 +664,7 @@ public sealed class RmqTopicConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             subscription,
             NullLogger<RmqTopicConsumer<TestPayload>>.Instance);
@@ -675,4 +675,9 @@ public sealed class RmqTopicConsumerTests
     }
 
     public sealed record TestPayload(int Id);
+
+    private static Func<TestPayload, MessageContext, CancellationToken, Task> CreateHandlerInvoker()
+    {
+        return (_, _, _) => Task.CompletedTask;
+    }
 }

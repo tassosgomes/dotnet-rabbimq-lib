@@ -101,6 +101,21 @@ public sealed class CloudEventWrapperTests
         action.Should().Throw<RmqConsumeException>();
     }
 
+    [Fact]
+    public void Wrap_ShouldThrowNotSupportedException_WhenSpecVersionIsUnsupported()
+    {
+        var wrapper = new CloudEventWrapper(new CloudEventsOptions
+        {
+            Source = new Uri("/my-service", UriKind.Relative),
+            DefaultType = "com.default.event.v1",
+            SpecVersion = "0.3"
+        });
+
+        var action = () => wrapper.Wrap(new PingPayload("unsupported"));
+
+        action.Should().Throw<NotSupportedException>();
+    }
+
     private static CloudEventWrapper CreateWrapper()
     {
         var options = new CloudEventsOptions

@@ -19,44 +19,48 @@ internal sealed class QueueManager : IQueueManager
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
         ArgumentNullException.ThrowIfNull(options);
 
-        var dlqName = $"{queueName}{options.Dlq.QueueNameSuffix}";
-        var dlxName = $"{queueName}.dlx";
-
-        await channel.ExchangeDeclareAsync(
-            exchange: dlxName,
-            type: ExchangeType.Direct,
-            durable: true,
-            autoDelete: false,
-            arguments: null,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        var dlqArguments = new Dictionary<string, object?>
-        {
-            ["x-queue-type"] = "quorum"
-        };
-
-        await channel.QueueDeclareAsync(
-            queue: dlqName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            arguments: dlqArguments,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        await channel.QueueBindAsync(
-            queue: dlqName,
-            exchange: dlxName,
-            routingKey: queueName,
-            arguments: null,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
         var queueArguments = new Dictionary<string, object?>
         {
             ["x-queue-type"] = "quorum",
-            ["x-dead-letter-exchange"] = dlxName,
-            ["x-dead-letter-routing-key"] = queueName,
             ["x-delivery-limit"] = options.DeliveryLimit
         };
+
+        if (options.Dlq.Enabled)
+        {
+            var dlqName = $"{queueName}{options.Dlq.QueueNameSuffix}";
+            var dlxName = $"{queueName}.dlx";
+
+            await channel.ExchangeDeclareAsync(
+                exchange: dlxName,
+                type: ExchangeType.Direct,
+                durable: true,
+                autoDelete: false,
+                arguments: null,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            var dlqArguments = new Dictionary<string, object?>
+            {
+                ["x-queue-type"] = "quorum"
+            };
+
+            await channel.QueueDeclareAsync(
+                queue: dlqName,
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: dlqArguments,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            await channel.QueueBindAsync(
+                queue: dlqName,
+                exchange: dlxName,
+                routingKey: queueName,
+                arguments: null,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            queueArguments["x-dead-letter-exchange"] = dlxName;
+            queueArguments["x-dead-letter-routing-key"] = queueName;
+        }
 
         if (options.QuorumSize > 0)
         {

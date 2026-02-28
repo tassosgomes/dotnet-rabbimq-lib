@@ -96,6 +96,37 @@ public sealed class RmqConnectionManagerTests
     }
 
     [Fact]
+    public async Task CreatePublisherChannelAsync_ShouldEnablePublisherConfirms()
+    {
+        var channelMock = new Mock<IChannel>();
+        var connectionMock = new Mock<IConnection>();
+        connectionMock.SetupGet(x => x.IsOpen).Returns(true);
+        connectionMock
+            .Setup(x => x.CreateChannelAsync(It.IsAny<CreateChannelOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(channelMock.Object);
+
+        var manager = new RmqConnectionManager(
+            new RmqConnectionOptions(),
+            null,
+            (_, _) => Task.FromResult(connectionMock.Object),
+            NullLogger<RmqConnectionManager>.Instance);
+
+        var channel = await manager.CreatePublisherChannelAsync();
+
+        channel.Should().BeSameAs(channelMock.Object);
+        connectionMock.Verify(
+            x => x.CreateChannelAsync(
+                It.Is<CreateChannelOptions?>(opts =>
+                    opts != null
+                    && opts.PublisherConfirmationsEnabled == true
+                    && opts.PublisherConfirmationTrackingEnabled == true),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        await manager.DisposeAsync();
+    }
+
+    [Fact]
     public async Task GetConnectionAsync_ShouldConfigureRecoveryAndSslFromOptions()
     {
         var connectionMock = new Mock<IConnection>();

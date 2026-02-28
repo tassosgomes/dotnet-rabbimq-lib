@@ -4,6 +4,7 @@ using Polly;
 using Polly.Retry;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
+using RabbitMQ.Client.Events;
 using Rmq.CloudEvents.CloudEvents;
 using Rmq.CloudEvents.Configuration;
 using Rmq.CloudEvents.Connection;
@@ -138,11 +139,11 @@ internal sealed class RmqPublisher : IRmqPublisher
                         : headers.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value)
                 };
 
-                await _channel!.BasicPublishAsync(
+                await PublishAndConfirmAsync(
                     exchange: string.Empty,
                     routingKey: queueName,
                     mandatory: true,
-                    basicProperties: properties,
+                    properties: properties,
                     body: body,
                     cancellationToken: ct).ConfigureAwait(false);
 
@@ -189,11 +190,11 @@ internal sealed class RmqPublisher : IRmqPublisher
                         : headers.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value)
                 };
 
-                await _channel!.BasicPublishAsync(
+                await PublishAndConfirmAsync(
                     exchange: exchangeName,
                     routingKey: routingKey,
-                    mandatory: false,
-                    basicProperties: properties,
+                    mandatory: true,
+                    properties: properties,
                     body: body,
                     cancellationToken: ct).ConfigureAwait(false);
 
@@ -222,7 +223,7 @@ internal sealed class RmqPublisher : IRmqPublisher
                 return;
             }
 
-            _channel = await _connectionManager.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
+            _channel = await _connectionManager.CreatePublisherChannelAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -268,18 +269,31 @@ internal sealed class RmqPublisher : IRmqPublisher
 
         return new QueueOptions
         {
+            PrefetchCount = 0,
             Retry = new RetryOptions
             {
                 MaxAttempts = _options.DefaultRetry.MaxAttempts,
                 InitialDelay = _options.DefaultRetry.InitialDelay,
                 BackoffType = _options.DefaultRetry.BackoffType,
                 UseJitter = _options.DefaultRetry.UseJitter
+            },
+            Dlq = new DlqOptions
+            {
+                Enabled = true,
+                QueueNameSuffix = ".dlq"
             }
         };
     }
 
     private static ResiliencePipeline BuildRetryPipeline(RetryOptions options, ILogger logger)
     {
+        var totalAttempts = Math.Max(1, options.MaxAttempts);
+
+        if (totalAttempts == 1)
+        {
+            return new ResiliencePipelineBuilder().Build();
+        }
+
         return new ResiliencePipelineBuilder()
             .AddRetry(new RetryStrategyOptions
             {
@@ -287,7 +301,7 @@ internal sealed class RmqPublisher : IRmqPublisher
                     .Handle<RabbitMQClientException>()
                     .Handle<IOException>()
                     .Handle<TimeoutException>(),
-                MaxRetryAttempts = options.MaxAttempts,
+                MaxRetryAttempts = totalAttempts - 1,
                 Delay = options.InitialDelay,
                 BackoffType = ToDelayBackoffType(options.BackoffType),
                 UseJitter = options.UseJitter,
@@ -296,8 +310,8 @@ internal sealed class RmqPublisher : IRmqPublisher
                     logger.LogWarning(
                         args.Outcome.Exception,
                         "Tentativa de publish {Attempt}/{MaxAttempts} falhou. Proximo retry em {RetryDelay}",
-                        args.AttemptNumber + 1,
-                        options.MaxAttempts,
+                        args.AttemptNumber + 2,
+                        totalAttempts,
                         args.RetryDelay);
 
                     return default;
@@ -347,5 +361,94 @@ internal sealed class RmqPublisher : IRmqPublisher
         {
             _channelLock.Release();
         }
+    }
+
+    private async Task PublishAndConfirmAsync(
+        string exchange,
+        string routingKey,
+        bool mandatory,
+        BasicProperties properties,
+        ReadOnlyMemory<byte> body,
+        CancellationToken cancellationToken)
+    {
+        await _channelLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var confirmation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            string? returnedReason = null;
+
+            AsyncEventHandler<BasicAckEventArgs> onAck = (_, _) =>
+            {
+                confirmation.TrySetResult();
+                return Task.CompletedTask;
+            };
+
+            AsyncEventHandler<BasicNackEventArgs> onNack = (_, args) =>
+            {
+                confirmation.TrySetException(
+                    new InvalidOperationException(
+                        $"Broker negatively acknowledged publish to '{DescribeTarget(exchange, routingKey)}' (deliveryTag={args.DeliveryTag})."));
+                return Task.CompletedTask;
+            };
+
+            AsyncEventHandler<BasicReturnEventArgs> onReturn = (_, args) =>
+            {
+                returnedReason = $"{args.ReplyCode} {args.ReplyText}".Trim();
+                confirmation.TrySetException(
+                    new InvalidOperationException(
+                        $"Broker returned unroutable publish to '{DescribeTarget(exchange, routingKey)}' ({returnedReason})."));
+                return Task.CompletedTask;
+            };
+
+            _channel!.BasicAcksAsync += onAck;
+            _channel.BasicNacksAsync += onNack;
+            _channel.BasicReturnAsync += onReturn;
+
+            try
+            {
+                using var timeoutCts = new CancellationTokenSource(_options.PublishConfirmTimeout);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+                await _channel.BasicPublishAsync(
+                    exchange: exchange,
+                    routingKey: routingKey,
+                    mandatory: mandatory,
+                    basicProperties: properties,
+                    body: body,
+                    cancellationToken: linkedCts.Token).ConfigureAwait(false);
+
+                using var registration = linkedCts.Token.Register(() =>
+                {
+                    if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                    {
+                        confirmation.TrySetException(
+                            new TimeoutException(
+                                $"Timed out after {_options.PublishConfirmTimeout} waiting for broker confirmation for '{DescribeTarget(exchange, routingKey)}'."));
+                        return;
+                    }
+
+                    confirmation.TrySetCanceled(linkedCts.Token);
+                });
+
+                await confirmation.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                _channel.BasicAcksAsync -= onAck;
+                _channel.BasicNacksAsync -= onNack;
+                _channel.BasicReturnAsync -= onReturn;
+            }
+        }
+        finally
+        {
+            _channelLock.Release();
+        }
+    }
+
+    private static string DescribeTarget(string exchange, string routingKey)
+    {
+        return string.IsNullOrWhiteSpace(exchange)
+            ? routingKey
+            : $"{exchange}/{routingKey}";
     }
 }

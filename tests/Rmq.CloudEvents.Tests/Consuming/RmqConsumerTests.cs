@@ -43,7 +43,7 @@ public sealed class RmqConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             "orders",
             NullLogger<RmqConsumer<TestPayload>>.Instance);
@@ -104,7 +104,7 @@ public sealed class RmqConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             wrapperMock.Object,
-            handlerMock.Object,
+            handlerMock.Object.HandleAsync,
             new RmqOptions(),
             "orders",
             NullLogger<RmqConsumer<TestPayload>>.Instance);
@@ -165,7 +165,7 @@ public sealed class RmqConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             new Mock<ICloudEventWrapper>().Object,
-            new Mock<IRmqMessageHandler<TestPayload>>().Object,
+            CreateHandlerInvoker(),
             options,
             "orders",
             NullLogger<RmqConsumer<TestPayload>>.Instance);
@@ -204,7 +204,7 @@ public sealed class RmqConsumerTests
             connectionManagerMock.Object,
             queueManagerMock.Object,
             new Mock<ICloudEventWrapper>().Object,
-            new Mock<IRmqMessageHandler<TestPayload>>().Object,
+            CreateHandlerInvoker(),
             new RmqOptions(),
             "orders",
             NullLogger<RmqConsumer<TestPayload>>.Instance);
@@ -261,7 +261,7 @@ public sealed class RmqConsumerTests
             connectionManagerMock.Object,
             new Mock<IQueueManager>().Object,
             new Mock<ICloudEventWrapper>().Object,
-            new Mock<IRmqMessageHandler<TestPayload>>().Object,
+            CreateHandlerInvoker(),
             new RmqOptions(),
             "orders",
             NullLogger<RmqConsumer<TestPayload>>.Instance);
@@ -275,4 +275,9 @@ public sealed class RmqConsumerTests
     }
 
     public sealed record TestPayload(int Id);
+
+    private static Func<TestPayload, MessageContext, CancellationToken, Task> CreateHandlerInvoker()
+    {
+        return (_, _, _) => Task.CompletedTask;
+    }
 }

@@ -19,7 +19,7 @@ internal sealed class RmqTopicConsumer<T> : IHostedService, IRmqConsumer
     private readonly IRmqConnectionManager _connectionManager;
     private readonly IQueueManager _queueManager;
     private readonly ICloudEventWrapper _cloudEventWrapper;
-    private readonly IRmqMessageHandler<T> _messageHandler;
+    private readonly Func<T, MessageContext, CancellationToken, Task> _messageHandlerInvoker;
     private readonly RmqOptions _options;
     private readonly TopicSubscriptionOptions _subscription;
     private readonly ILogger<RmqTopicConsumer<T>> _logger;
@@ -33,7 +33,7 @@ internal sealed class RmqTopicConsumer<T> : IHostedService, IRmqConsumer
         IRmqConnectionManager connectionManager,
         IQueueManager queueManager,
         ICloudEventWrapper cloudEventWrapper,
-        IRmqMessageHandler<T> messageHandler,
+        Func<T, MessageContext, CancellationToken, Task> messageHandlerInvoker,
         RmqOptions options,
         TopicSubscriptionOptions subscription,
         ILogger<RmqTopicConsumer<T>>? logger = null)
@@ -41,7 +41,7 @@ internal sealed class RmqTopicConsumer<T> : IHostedService, IRmqConsumer
         _connectionManager = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
         _queueManager = queueManager ?? throw new ArgumentNullException(nameof(queueManager));
         _cloudEventWrapper = cloudEventWrapper ?? throw new ArgumentNullException(nameof(cloudEventWrapper));
-        _messageHandler = messageHandler ?? throw new ArgumentNullException(nameof(messageHandler));
+        _messageHandlerInvoker = messageHandlerInvoker ?? throw new ArgumentNullException(nameof(messageHandlerInvoker));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _subscription = subscription ?? throw new ArgumentNullException(nameof(subscription));
         _logger = logger ?? NullLogger<RmqTopicConsumer<T>>.Instance;
@@ -78,9 +78,14 @@ internal sealed class RmqTopicConsumer<T> : IHostedService, IRmqConsumer
 
             var retryOptions = _subscription.Queue.Retry;
 
+            if (_subscription.Queue.PrefetchCount > 0)
+            {
+                await channel.BasicQosAsync(0, _subscription.Queue.PrefetchCount, false, cancellationToken).ConfigureAwait(false);
+            }
+
             var consumerHandler = new RmqAsyncConsumerHandler<T>(
                 channel,
-                _messageHandler,
+                _messageHandlerInvoker,
                 _cloudEventWrapper,
                 retryOptions,
                 queueName,

@@ -45,6 +45,7 @@ public sealed class OptionsDefaultsTests
     {
         var options = new QueueOptions();
 
+        options.PrefetchCount.Should().Be(0);
         options.QuorumSize.Should().Be(0);
         options.DeliveryLimit.Should().Be(5);
         options.Retry.Should().NotBeNull();
@@ -69,6 +70,7 @@ public sealed class OptionsDefaultsTests
         options.Connection.Should().NotBeNull();
         options.DefaultCloudEvents.Should().NotBeNull();
         options.DefaultRetry.Should().NotBeNull();
+        options.PublishConfirmTimeout.Should().Be(TimeSpan.FromSeconds(15));
         options.Queues.Should().NotBeNull();
         options.Queues.Should().BeEmpty();
     }
