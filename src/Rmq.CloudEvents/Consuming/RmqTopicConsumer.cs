@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using RabbitMQ.Client;
@@ -13,21 +12,13 @@ namespace Rmq.CloudEvents.Consuming;
 /// Hosted service para consumo de mensagens via Topic Exchange.
 /// </summary>
 /// <typeparam name="T">Tipo do payload consumido.</typeparam>
-internal sealed class RmqTopicConsumer<T> : IHostedService, IRmqConsumer
+internal sealed class RmqTopicConsumer<T> : RmqConsumerHostedServiceBase<T>
     where T : class
 {
-    private readonly IRmqConnectionManager _connectionManager;
     private readonly IQueueManager _queueManager;
-    private readonly ICloudEventWrapper _cloudEventWrapper;
-    private readonly Func<T, MessageContext, CancellationToken, Task> _messageHandlerInvoker;
     private readonly RmqOptions _options;
     private readonly TopicSubscriptionOptions _subscription;
     private readonly ILogger<RmqTopicConsumer<T>> _logger;
-    private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
-    private IChannel? _channel;
-    private string? _consumerTag;
-    private bool _isStarted;
-    private bool _disposed;
 
     public RmqTopicConsumer(
         IRmqConnectionManager connectionManager,
@@ -37,143 +28,64 @@ internal sealed class RmqTopicConsumer<T> : IHostedService, IRmqConsumer
         RmqOptions options,
         TopicSubscriptionOptions subscription,
         ILogger<RmqTopicConsumer<T>>? logger = null)
+        : base(
+            connectionManager,
+            cloudEventWrapper,
+            messageHandlerInvoker,
+            logger ?? NullLogger<RmqTopicConsumer<T>>.Instance)
     {
-        _connectionManager = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
         _queueManager = queueManager ?? throw new ArgumentNullException(nameof(queueManager));
-        _cloudEventWrapper = cloudEventWrapper ?? throw new ArgumentNullException(nameof(cloudEventWrapper));
-        _messageHandlerInvoker = messageHandlerInvoker ?? throw new ArgumentNullException(nameof(messageHandlerInvoker));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _subscription = subscription ?? throw new ArgumentNullException(nameof(subscription));
         _logger = logger ?? NullLogger<RmqTopicConsumer<T>>.Instance;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken = default)
+    protected override string QueueName =>
+        _subscription.QueueName
+        ?? throw new InvalidOperationException("QueueName is required for durable topic consumers.");
+
+    protected override RetryOptions RetryOptions => _subscription.Queue.Retry;
+
+    protected override ushort PrefetchCount => _subscription.Queue.PrefetchCount;
+
+    protected override TimeSpan RecoveryDelay => _options.Connection.NetworkRecoveryInterval;
+
+    protected override string StopReplyText => "Topic consumer stopped";
+
+    protected override Task DeclareTopologyAsync(IChannel channel, CancellationToken cancellationToken)
     {
-        await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (_isStarted && _channel is { IsOpen: true })
-            {
-                return;
-            }
+        var exchangeOptions = _options.Exchanges.TryGetValue(_subscription.ExchangeName, out var opts)
+            ? opts
+            : null;
 
-            await _connectionManager.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-            var channel = await _connectionManager.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
-
-            var queueName = _subscription.QueueName
-                ?? throw new InvalidOperationException("QueueName is required for durable topic consumers.");
-
-            var exchangeOptions = _options.Exchanges.TryGetValue(_subscription.ExchangeName, out var opts)
-                ? opts
-                : null;
-
-            await _queueManager.DeclareExchangeAndBindingsAsync(
-                channel,
-                _subscription.ExchangeName,
-                queueName,
-                _subscription.BindingPatterns,
-                _subscription.Queue,
-                exchangeOptions,
-                cancellationToken).ConfigureAwait(false);
-
-            var retryOptions = _subscription.Queue.Retry;
-
-            if (_subscription.Queue.PrefetchCount > 0)
-            {
-                await channel.BasicQosAsync(0, _subscription.Queue.PrefetchCount, false, cancellationToken).ConfigureAwait(false);
-            }
-
-            var consumerHandler = new RmqAsyncConsumerHandler<T>(
-                channel,
-                _messageHandlerInvoker,
-                _cloudEventWrapper,
-                retryOptions,
-                queueName,
-                _logger);
-
-            var consumerTag = await channel.BasicConsumeAsync(
-                queue: queueName,
-                autoAck: false,
-                consumerTag: string.Empty,
-                noLocal: false,
-                exclusive: false,
-                arguments: null,
-                consumer: consumerHandler,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            _channel = channel;
-            _consumerTag = consumerTag;
-            _isStarted = true;
-
-            _logger.LogInformation(
-                "Topic consumer iniciado. Exchange={Exchange}, Queue={Queue}, Patterns=[{Patterns}], Tag={Tag}",
-                _subscription.ExchangeName,
-                queueName,
-                string.Join(", ", _subscription.BindingPatterns),
-                _consumerTag);
-        }
-        finally
-        {
-            _lifecycleLock.Release();
-        }
+        return _queueManager.DeclareExchangeAndBindingsAsync(
+            channel,
+            _subscription.ExchangeName,
+            QueueName,
+            _subscription.BindingPatterns,
+            _subscription.Queue,
+            exchangeOptions,
+            cancellationToken);
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken = default)
-    {
-        if (_disposed)
-        {
-            return;
-        }
+    protected override void LogConsumerStarted(string consumerTag) =>
+        _logger.LogInformation(
+            "Topic consumer iniciado. Exchange={Exchange}, Queue={Queue}, Patterns=[{Patterns}], Tag={Tag}",
+            _subscription.ExchangeName,
+            QueueName,
+            string.Join(", ", _subscription.BindingPatterns),
+            consumerTag);
 
-        await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (!_isStarted || _channel is null)
-            {
-                return;
-            }
+    protected override void LogConsumerStopped() =>
+        _logger.LogInformation(
+            "Topic consumer parado. Exchange={Exchange}, Queue={Queue}",
+            _subscription.ExchangeName,
+            _subscription.QueueName);
 
-            var channel = _channel;
-            var consumerTag = _consumerTag;
-
-            _channel = null;
-            _consumerTag = null;
-            _isStarted = false;
-
-            if (!string.IsNullOrWhiteSpace(consumerTag))
-            {
-                await channel.BasicCancelAsync(consumerTag, false, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            if (channel.IsOpen)
-            {
-                await channel.CloseAsync(200, "Topic consumer stopped", false, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            await channel.DisposeAsync().ConfigureAwait(false);
-
-            _logger.LogInformation(
-                "Topic consumer parado. Exchange={Exchange}, Queue={Queue}",
-                _subscription.ExchangeName,
-                _subscription.QueueName);
-        }
-        finally
-        {
-            _lifecycleLock.Release();
-        }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        await StopAsync().ConfigureAwait(false);
-        _disposed = true;
-        _lifecycleLock.Dispose();
-    }
+    protected override void LogRecoveryTriggered(object? signal) =>
+        _logger.LogWarning(
+            "Topic consumer da exchange {Exchange} e queue {Queue} sinalizou recuperacao apos evento {SignalType}.",
+            _subscription.ExchangeName,
+            QueueName,
+            signal?.GetType().Name ?? "Unknown");
 }

@@ -411,6 +411,10 @@ public sealed class TopicExchangeTests
         {
             virtualHost = "/";
         }
+        else
+        {
+            virtualHost = virtualHost.TrimStart('/');
+        }
 
         options.Connection = new RmqConnectionOptions
         {

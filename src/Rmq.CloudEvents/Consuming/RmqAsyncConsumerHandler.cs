@@ -5,6 +5,8 @@ using Polly.Retry;
 using RabbitMQ.Client;
 using Rmq.CloudEvents.CloudEvents;
 using Rmq.CloudEvents.Configuration;
+using Rmq.CloudEvents.Diagnostics;
+using System.Diagnostics;
 
 namespace Rmq.CloudEvents.Consuming;
 
@@ -56,11 +58,14 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
         ReadOnlyMemory<byte> body,
         CancellationToken cancellationToken = default)
     {
+        RmqDiagnostics.RecordConsumeAttempt(_queueName);
+        var stopwatch = Stopwatch.StartNew();
         try
         {
             var (payload, metadata) = _cloudEventWrapper.Unwrap<T>(body);
             var headers = ConvertHeaders(properties.Headers);
             var currentAttempt = 0;
+            using var activity = RmqDiagnostics.StartConsumeActivity(_queueName, exchange, routingKey, metadata.EventType, metadata.EventId);
 
             await _retryPipeline.ExecuteAsync(
                 async ct =>
@@ -81,6 +86,9 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
                 cancellationToken).ConfigureAwait(false);
 
             await Channel.BasicAckAsync(deliveryTag, multiple: false, cancellationToken).ConfigureAwait(false);
+            stopwatch.Stop();
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            RmqDiagnostics.RecordConsumeSuccess(_queueName, stopwatch.Elapsed.TotalMilliseconds);
             _logger.LogDebug(
                 "Mensagem {EventId} processada com sucesso da queue {QueueName} na tentativa {AttemptNumber}",
                 metadata.EventId,
@@ -89,20 +97,25 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
         }
         catch (OperationCanceledException ex)
         {
+            stopwatch.Stop();
+            RmqDiagnostics.RecordConsumeFailure(_queueName, stopwatch.Elapsed.TotalMilliseconds);
             _logger.LogInformation(
                 ex,
-                "Processamento da mensagem {DeliveryTag} cancelado na queue {QueueName}. ACK/NACK nao sera enviado.",
+                "Processamento da mensagem {DeliveryTag} cancelado na queue {QueueName}. A mensagem sera reenfileirada.",
                 deliveryTag,
                 _queueName);
+            await TryNackAsync(deliveryTag, requeue: true, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
+            stopwatch.Stop();
+            RmqDiagnostics.RecordConsumeFailure(_queueName, stopwatch.Elapsed.TotalMilliseconds);
             _logger.LogError(
                 ex,
                 "Mensagem {DeliveryTag} falhou apos retries na queue {QueueName}. Enviando para DLQ.",
                 deliveryTag,
                 _queueName);
-            await Channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken).ConfigureAwait(false);
+            await TryNackAsync(deliveryTag, requeue: false, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -130,6 +143,7 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
                 ShouldHandle = new PredicateBuilder().Handle<Exception>(ex => ex is not OperationCanceledException),
                 OnRetry = args =>
                 {
+                    RmqDiagnostics.RecordConsumeRetry(queueName);
                     logger.LogWarning(
                         args.Outcome.Exception,
                         "Tentativa de consume {Attempt}/{MaxAttempts} falhou para queue {QueueName}. Proximo retry em {RetryDelay}",
@@ -178,5 +192,23 @@ internal sealed class RmqAsyncConsumerHandler<T> : AsyncDefaultBasicConsumer
         }
 
         return headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? string.Empty);
+    }
+
+    private async Task TryNackAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken)
+    {
+        if (!Channel.IsOpen)
+        {
+            _logger.LogWarning(
+                "Canal fechado ao rejeitar mensagem {DeliveryTag} da queue {QueueName}.",
+                deliveryTag,
+                _queueName);
+            return;
+        }
+
+        await Channel.BasicNackAsync(
+            deliveryTag,
+            multiple: false,
+            requeue: requeue,
+            cancellationToken).ConfigureAwait(false);
     }
 }

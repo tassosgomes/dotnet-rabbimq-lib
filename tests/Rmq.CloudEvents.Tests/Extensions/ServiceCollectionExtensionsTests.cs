@@ -68,7 +68,7 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IRmqPublisher)
             && descriptor.ImplementationType == typeof(RmqPublisher)
-            && descriptor.Lifetime == ServiceLifetime.Transient);
+            && descriptor.Lifetime == ServiceLifetime.Singleton);
     }
 
     [Fact]
@@ -105,6 +105,24 @@ public sealed class ServiceCollectionExtensionsTests
         var action = () => services.AddRmqCloudEvents(null!);
 
         action.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void AddRmqCloudEvents_ShouldValidateOptionsWhenResolved()
+    {
+        var services = new ServiceCollection();
+
+        services.AddRmqCloudEvents(options =>
+        {
+            options.Connection.HostName = string.Empty;
+            options.DefaultRetry.MaxAttempts = 0;
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        var action = () => provider.GetRequiredService<IOptions<RmqOptions>>().Value;
+
+        action.Should().Throw<OptionsValidationException>();
     }
 
     [Fact]

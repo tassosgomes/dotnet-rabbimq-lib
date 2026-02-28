@@ -81,7 +81,7 @@ public sealed class RmqAsyncConsumerHandlerTests
     }
 
     [Fact]
-    public async Task HandleBasicDeliverAsync_ShouldNotNack_WhenOperationIsCanceled()
+    public async Task HandleBasicDeliverAsync_ShouldRequeue_WhenOperationIsCanceled()
     {
         var channelMock = CreateChannelMock();
         var wrapperMock = new Mock<ICloudEventWrapper>();
@@ -115,7 +115,7 @@ public sealed class RmqAsyncConsumerHandlerTests
             x => x.HandleAsync(It.IsAny<TestPayload>(), It.IsAny<MessageContext>(), It.IsAny<CancellationToken>()),
             Times.Once);
         channelMock.Verify(x => x.BasicAckAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
-        channelMock.Verify(x => x.BasicNackAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+        channelMock.Verify(x => x.BasicNackAsync(13, false, true, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -332,6 +332,7 @@ public sealed class RmqAsyncConsumerHandlerTests
     private static Mock<IChannel> CreateChannelMock()
     {
         var channelMock = new Mock<IChannel>();
+        channelMock.SetupGet(x => x.IsOpen).Returns(true);
         channelMock.Setup(x => x.BasicAckAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .Returns(ValueTask.CompletedTask);
         channelMock.Setup(x => x.BasicNackAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))

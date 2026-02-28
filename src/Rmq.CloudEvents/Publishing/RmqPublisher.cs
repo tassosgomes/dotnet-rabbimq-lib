@@ -3,13 +3,16 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Polly;
 using Polly.Retry;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Exceptions;
 using RabbitMQ.Client.Events;
+using RabbitMQ.Client.Exceptions;
 using Rmq.CloudEvents.CloudEvents;
 using Rmq.CloudEvents.Configuration;
 using Rmq.CloudEvents.Connection;
+using Rmq.CloudEvents.Diagnostics;
 using Rmq.CloudEvents.Exceptions;
 using Rmq.CloudEvents.Infrastructure;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace Rmq.CloudEvents.Publishing;
 
@@ -23,14 +26,10 @@ internal sealed class RmqPublisher : IRmqPublisher
     private readonly ICloudEventWrapper _cloudEventWrapper;
     private readonly RmqOptions _options;
     private readonly ILogger<RmqPublisher> _logger;
-    private readonly SemaphoreSlim _channelLock = new(1, 1);
-    private readonly HashSet<string> _declaredQueues = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _declaredExchanges = new(StringComparer.Ordinal);
-    private IChannel? _channel;
+    private readonly SemaphoreSlim _topologyLock = new(1, 1);
+    private readonly ConcurrentDictionary<string, byte> _declaredQueues = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _declaredExchanges = new(StringComparer.Ordinal);
 
-    /// <summary>
-    /// Inicializa uma nova instancia de <see cref="RmqPublisher"/>.
-    /// </summary>
     public RmqPublisher(
         IRmqConnectionManager connectionManager,
         IQueueManager queueManager,
@@ -45,7 +44,6 @@ internal sealed class RmqPublisher : IRmqPublisher
         _logger = logger ?? NullLogger<RmqPublisher>.Instance;
     }
 
-    /// <inheritdoc />
     public Task PublishAsync<T>(
         string queueName,
         T payload,
@@ -56,7 +54,6 @@ internal sealed class RmqPublisher : IRmqPublisher
         return PublishInternalAsync(queueName, payload, headers: null, cloudEventType, cancellationToken);
     }
 
-    /// <inheritdoc />
     public Task PublishAsync<T>(
         string queueName,
         T payload,
@@ -69,7 +66,6 @@ internal sealed class RmqPublisher : IRmqPublisher
         return PublishInternalAsync(queueName, payload, headers, cloudEventType, cancellationToken);
     }
 
-    /// <inheritdoc />
     public Task PublishToTopicAsync<T>(
         string exchangeName,
         string routingKey,
@@ -81,7 +77,6 @@ internal sealed class RmqPublisher : IRmqPublisher
         return PublishToTopicInternalAsync(exchangeName, routingKey, payload, headers: null, cloudEventType, cancellationToken);
     }
 
-    /// <inheritdoc />
     public Task PublishToTopicAsync<T>(
         string exchangeName,
         string routingKey,
@@ -95,16 +90,10 @@ internal sealed class RmqPublisher : IRmqPublisher
         return PublishToTopicInternalAsync(exchangeName, routingKey, payload, headers, cloudEventType, cancellationToken);
     }
 
-    /// <inheritdoc />
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_channel is not null)
-        {
-            await _channel.DisposeAsync().ConfigureAwait(false);
-            _channel = null;
-        }
-
-        _channelLock.Dispose();
+        _topologyLock.Dispose();
+        return ValueTask.CompletedTask;
     }
 
     private async Task PublishInternalAsync<T>(
@@ -118,40 +107,62 @@ internal sealed class RmqPublisher : IRmqPublisher
         ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
         ArgumentNullException.ThrowIfNull(payload);
 
-        await EnsureChannelAsync(cancellationToken).ConfigureAwait(false);
-        await EnsureQueueDeclaredAsync(queueName, cancellationToken).ConfigureAwait(false);
-
         var body = _cloudEventWrapper.Wrap(payload, cloudEventType);
         var queueOptions = GetQueueOptions(queueName);
-        var retryPipeline = BuildRetryPipeline(queueOptions.Retry, _logger);
+        var retryPipeline = BuildRetryPipeline(queueOptions.Retry, _logger, "queue", queueName);
+        var stopwatch = Stopwatch.StartNew();
 
+        using var activity = RmqDiagnostics.StartPublishActivity("queue", queueName, queueName);
         try
         {
             await retryPipeline.ExecuteAsync(async ct =>
             {
-                var properties = new BasicProperties
+                try
                 {
-                    ContentType = "application/cloudevents+json",
-                    DeliveryMode = DeliveryModes.Persistent,
-                    MessageId = Guid.NewGuid().ToString(),
-                    Headers = headers is null
-                        ? null
-                        : headers.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value)
-                };
+                    await using var channel = await _connectionManager.CreatePublisherChannelAsync(ct).ConfigureAwait(false);
+                    await EnsureQueueDeclaredAsync(channel, queueName, queueOptions, ct).ConfigureAwait(false);
 
-                await PublishAndConfirmAsync(
-                    exchange: string.Empty,
-                    routingKey: queueName,
-                    mandatory: true,
-                    properties: properties,
-                    body: body,
-                    cancellationToken: ct).ConfigureAwait(false);
+                    var properties = CreateProperties(headers);
+                    activity?.SetTag("messaging.message.id", properties.MessageId);
+                    RmqDiagnostics.RecordPublishAttempt("queue", queueName);
 
-                _logger.LogDebug("Mensagem publicada com sucesso na queue {QueueName}", queueName);
+                    using var scope = _logger.BeginScope(new Dictionary<string, object?>
+                    {
+                        ["RmqDestinationKind"] = "queue",
+                        ["RmqDestinationName"] = queueName,
+                        ["RmqMessageId"] = properties.MessageId
+                    });
+
+                    await PublishAndConfirmAsync(
+                        channel,
+                        exchange: string.Empty,
+                        routingKey: queueName,
+                        mandatory: true,
+                        properties: properties,
+                        body: body,
+                        cancellationToken: ct).ConfigureAwait(false);
+
+                    _logger.LogDebug("Mensagem publicada com sucesso na queue {QueueName}", queueName);
+                }
+                catch
+                {
+                    _declaredQueues.TryRemove(queueName, out _);
+                    throw;
+                }
             }, cancellationToken).ConfigureAwait(false);
+
+            stopwatch.Stop();
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            RmqDiagnostics.RecordPublishSuccess("queue", queueName, stopwatch.Elapsed.TotalMilliseconds);
         }
         catch (Exception ex)
         {
+            stopwatch.Stop();
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("exception.type", ex.GetType().FullName);
+            activity?.SetTag("exception.message", ex.Message);
+            RmqDiagnostics.RecordPublishFailure("queue", queueName, stopwatch.Elapsed.TotalMilliseconds);
+            _declaredQueues.TryRemove(queueName, out _);
             _logger.LogError(ex, "Falha ao publicar mensagem na queue {QueueName} apos retries", queueName);
             throw new RmqPublishException(queueName, queueOptions.Retry.MaxAttempts, ex);
         }
@@ -170,93 +181,150 @@ internal sealed class RmqPublisher : IRmqPublisher
         ArgumentException.ThrowIfNullOrWhiteSpace(routingKey);
         ArgumentNullException.ThrowIfNull(payload);
 
-        await EnsureChannelAsync(cancellationToken).ConfigureAwait(false);
-        await EnsureExchangeDeclaredAsync(exchangeName, cancellationToken).ConfigureAwait(false);
-
         var body = _cloudEventWrapper.Wrap(payload, cloudEventType);
-        var retryPipeline = BuildRetryPipeline(_options.DefaultRetry, _logger);
+        var retryPipeline = BuildRetryPipeline(_options.DefaultRetry, _logger, "exchange", exchangeName);
+        var stopwatch = Stopwatch.StartNew();
 
+        using var activity = RmqDiagnostics.StartPublishActivity("exchange", exchangeName, routingKey);
         try
         {
             await retryPipeline.ExecuteAsync(async ct =>
             {
-                var properties = new BasicProperties
+                try
                 {
-                    ContentType = "application/cloudevents+json",
-                    DeliveryMode = DeliveryModes.Persistent,
-                    MessageId = Guid.NewGuid().ToString(),
-                    Headers = headers is null
-                        ? null
-                        : headers.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value)
-                };
+                    await using var channel = await _connectionManager.CreatePublisherChannelAsync(ct).ConfigureAwait(false);
+                    await EnsureExchangeDeclaredAsync(channel, exchangeName, ct).ConfigureAwait(false);
 
-                await PublishAndConfirmAsync(
-                    exchange: exchangeName,
-                    routingKey: routingKey,
-                    mandatory: true,
-                    properties: properties,
-                    body: body,
-                    cancellationToken: ct).ConfigureAwait(false);
+                    var properties = CreateProperties(headers);
+                    activity?.SetTag("messaging.message.id", properties.MessageId);
+                    RmqDiagnostics.RecordPublishAttempt("exchange", exchangeName);
 
-                _logger.LogDebug("Mensagem publicada com sucesso na exchange {ExchangeName} com routing key {RoutingKey}", exchangeName, routingKey);
+                    using var scope = _logger.BeginScope(new Dictionary<string, object?>
+                    {
+                        ["RmqDestinationKind"] = "exchange",
+                        ["RmqDestinationName"] = exchangeName,
+                        ["RmqRoutingKey"] = routingKey,
+                        ["RmqMessageId"] = properties.MessageId
+                    });
+
+                    await PublishAndConfirmAsync(
+                        channel,
+                        exchange: exchangeName,
+                        routingKey: routingKey,
+                        mandatory: true,
+                        properties: properties,
+                        body: body,
+                        cancellationToken: ct).ConfigureAwait(false);
+
+                    _logger.LogDebug(
+                        "Mensagem publicada com sucesso na exchange {ExchangeName} com routing key {RoutingKey}",
+                        exchangeName,
+                        routingKey);
+                }
+                catch
+                {
+                    _declaredExchanges.TryRemove(exchangeName, out _);
+                    throw;
+                }
             }, cancellationToken).ConfigureAwait(false);
+
+            stopwatch.Stop();
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            RmqDiagnostics.RecordPublishSuccess("exchange", exchangeName, stopwatch.Elapsed.TotalMilliseconds);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Falha ao publicar mensagem na exchange {ExchangeName} com routing key {RoutingKey} apos retries", exchangeName, routingKey);
+            stopwatch.Stop();
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("exception.type", ex.GetType().FullName);
+            activity?.SetTag("exception.message", ex.Message);
+            RmqDiagnostics.RecordPublishFailure("exchange", exchangeName, stopwatch.Elapsed.TotalMilliseconds);
+            _declaredExchanges.TryRemove(exchangeName, out _);
+            _logger.LogError(
+                ex,
+                "Falha ao publicar mensagem na exchange {ExchangeName} com routing key {RoutingKey} apos retries",
+                exchangeName,
+                routingKey);
             throw new RmqPublishException($"{exchangeName}/{routingKey}", _options.DefaultRetry.MaxAttempts, ex);
         }
     }
 
-    private async Task EnsureChannelAsync(CancellationToken cancellationToken)
+    private static BasicProperties CreateProperties(IDictionary<string, object>? headers)
     {
-        if (_channel is { IsOpen: true })
+        return new BasicProperties
+        {
+            ContentType = "application/cloudevents+json",
+            DeliveryMode = DeliveryModes.Persistent,
+            MessageId = Guid.NewGuid().ToString(),
+            Headers = headers is null
+                ? null
+                : headers.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value)
+        };
+    }
+
+    private async Task EnsureQueueDeclaredAsync(
+        IChannel channel,
+        string queueName,
+        QueueOptions queueOptions,
+        CancellationToken cancellationToken)
+    {
+        if (_declaredQueues.ContainsKey(queueName))
         {
             return;
         }
 
-        await _channelLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _topologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_channel is { IsOpen: true })
+            if (_declaredQueues.ContainsKey(queueName))
             {
                 return;
             }
 
-            _channel = await _connectionManager.CreatePublisherChannelAsync(cancellationToken).ConfigureAwait(false);
+            await _queueManager.DeclareQueueWithDlqAsync(channel, queueName, queueOptions, cancellationToken).ConfigureAwait(false);
+            _declaredQueues.TryAdd(queueName, 0);
         }
         finally
         {
-            _channelLock.Release();
+            _topologyLock.Release();
         }
     }
 
-    private async Task EnsureQueueDeclaredAsync(string queueName, CancellationToken cancellationToken)
+    private async Task EnsureExchangeDeclaredAsync(
+        IChannel channel,
+        string exchangeName,
+        CancellationToken cancellationToken)
     {
-        if (_declaredQueues.Contains(queueName))
+        if (_declaredExchanges.ContainsKey(exchangeName))
         {
             return;
         }
 
-        await _channelLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _topologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_declaredQueues.Contains(queueName))
+            if (_declaredExchanges.ContainsKey(exchangeName))
             {
                 return;
             }
 
-            await _queueManager.DeclareQueueWithDlqAsync(
-                _channel!,
-                queueName,
-                GetQueueOptions(queueName),
-                cancellationToken).ConfigureAwait(false);
+            var opts = _options.Exchanges.TryGetValue(exchangeName, out var configured)
+                ? configured
+                : new ExchangeOptions { Name = exchangeName };
 
-            _declaredQueues.Add(queueName);
+            await channel.ExchangeDeclareAsync(
+                exchange: exchangeName,
+                type: ExchangeType.Topic,
+                durable: opts.Durable,
+                autoDelete: opts.AutoDelete,
+                arguments: opts.Arguments?.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value),
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            _declaredExchanges.TryAdd(exchangeName, 0);
         }
         finally
         {
-            _channelLock.Release();
+            _topologyLock.Release();
         }
     }
 
@@ -285,7 +353,11 @@ internal sealed class RmqPublisher : IRmqPublisher
         };
     }
 
-    private static ResiliencePipeline BuildRetryPipeline(RetryOptions options, ILogger logger)
+    private static ResiliencePipeline BuildRetryPipeline(
+        RetryOptions options,
+        ILogger logger,
+        string destinationKind,
+        string destinationName)
     {
         var totalAttempts = Math.Max(1, options.MaxAttempts);
 
@@ -307,11 +379,14 @@ internal sealed class RmqPublisher : IRmqPublisher
                 UseJitter = options.UseJitter,
                 OnRetry = args =>
                 {
+                    RmqDiagnostics.RecordPublishRetry(destinationKind, destinationName);
                     logger.LogWarning(
                         args.Outcome.Exception,
-                        "Tentativa de publish {Attempt}/{MaxAttempts} falhou. Proximo retry em {RetryDelay}",
+                        "Tentativa de publish {Attempt}/{MaxAttempts} falhou para {DestinationKind} {DestinationName}. Proximo retry em {RetryDelay}",
                         args.AttemptNumber + 2,
                         totalAttempts,
+                        destinationKind,
+                        destinationName,
                         args.RetryDelay);
 
                     return default;
@@ -330,40 +405,8 @@ internal sealed class RmqPublisher : IRmqPublisher
         };
     }
 
-    private async Task EnsureExchangeDeclaredAsync(string exchangeName, CancellationToken cancellationToken)
-    {
-        if (_declaredExchanges.Contains(exchangeName))
-        {
-            return;
-        }
-
-        await _channelLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (_declaredExchanges.Contains(exchangeName))
-            {
-                return;
-            }
-
-            var opts = _options.Exchanges.TryGetValue(exchangeName, out var o) ? o : new ExchangeOptions { Name = exchangeName };
-
-            await _channel!.ExchangeDeclareAsync(
-                exchange: exchangeName,
-                type: ExchangeType.Topic,
-                durable: opts.Durable,
-                autoDelete: opts.AutoDelete,
-                arguments: opts.Arguments?.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value),
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            _declaredExchanges.Add(exchangeName);
-        }
-        finally
-        {
-            _channelLock.Release();
-        }
-    }
-
     private async Task PublishAndConfirmAsync(
+        IChannel channel,
         string exchange,
         string routingKey,
         bool mandatory,
@@ -371,77 +414,68 @@ internal sealed class RmqPublisher : IRmqPublisher
         ReadOnlyMemory<byte> body,
         CancellationToken cancellationToken)
     {
-        await _channelLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var confirmation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        AsyncEventHandler<BasicAckEventArgs> onAck = (_, _) =>
+        {
+            confirmation.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        AsyncEventHandler<BasicNackEventArgs> onNack = (_, args) =>
+        {
+            confirmation.TrySetException(
+                new InvalidOperationException(
+                    $"Broker negatively acknowledged publish to '{DescribeTarget(exchange, routingKey)}' (deliveryTag={args.DeliveryTag})."));
+            return Task.CompletedTask;
+        };
+
+        AsyncEventHandler<BasicReturnEventArgs> onReturn = (_, args) =>
+        {
+            var returnedReason = $"{args.ReplyCode} {args.ReplyText}".Trim();
+            confirmation.TrySetException(
+                new InvalidOperationException(
+                    $"Broker returned unroutable publish to '{DescribeTarget(exchange, routingKey)}' ({returnedReason})."));
+            return Task.CompletedTask;
+        };
+
+        channel.BasicAcksAsync += onAck;
+        channel.BasicNacksAsync += onNack;
+        channel.BasicReturnAsync += onReturn;
+
         try
         {
-            var confirmation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            string? returnedReason = null;
+            using var timeoutCts = new CancellationTokenSource(_options.PublishConfirmTimeout);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-            AsyncEventHandler<BasicAckEventArgs> onAck = (_, _) =>
+            await channel.BasicPublishAsync(
+                exchange: exchange,
+                routingKey: routingKey,
+                mandatory: mandatory,
+                basicProperties: properties,
+                body: body,
+                cancellationToken: linkedCts.Token).ConfigureAwait(false);
+
+            using var registration = linkedCts.Token.Register(() =>
             {
-                confirmation.TrySetResult();
-                return Task.CompletedTask;
-            };
-
-            AsyncEventHandler<BasicNackEventArgs> onNack = (_, args) =>
-            {
-                confirmation.TrySetException(
-                    new InvalidOperationException(
-                        $"Broker negatively acknowledged publish to '{DescribeTarget(exchange, routingKey)}' (deliveryTag={args.DeliveryTag})."));
-                return Task.CompletedTask;
-            };
-
-            AsyncEventHandler<BasicReturnEventArgs> onReturn = (_, args) =>
-            {
-                returnedReason = $"{args.ReplyCode} {args.ReplyText}".Trim();
-                confirmation.TrySetException(
-                    new InvalidOperationException(
-                        $"Broker returned unroutable publish to '{DescribeTarget(exchange, routingKey)}' ({returnedReason})."));
-                return Task.CompletedTask;
-            };
-
-            _channel!.BasicAcksAsync += onAck;
-            _channel.BasicNacksAsync += onNack;
-            _channel.BasicReturnAsync += onReturn;
-
-            try
-            {
-                using var timeoutCts = new CancellationTokenSource(_options.PublishConfirmTimeout);
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-                await _channel.BasicPublishAsync(
-                    exchange: exchange,
-                    routingKey: routingKey,
-                    mandatory: mandatory,
-                    basicProperties: properties,
-                    body: body,
-                    cancellationToken: linkedCts.Token).ConfigureAwait(false);
-
-                using var registration = linkedCts.Token.Register(() =>
+                if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
-                    if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-                    {
-                        confirmation.TrySetException(
-                            new TimeoutException(
-                                $"Timed out after {_options.PublishConfirmTimeout} waiting for broker confirmation for '{DescribeTarget(exchange, routingKey)}'."));
-                        return;
-                    }
+                    confirmation.TrySetException(
+                        new TimeoutException(
+                            $"Timed out after {_options.PublishConfirmTimeout} waiting for broker confirmation for '{DescribeTarget(exchange, routingKey)}'."));
+                    return;
+                }
 
-                    confirmation.TrySetCanceled(linkedCts.Token);
-                });
+                confirmation.TrySetCanceled(linkedCts.Token);
+            });
 
-                await confirmation.Task.ConfigureAwait(false);
-            }
-            finally
-            {
-                _channel.BasicAcksAsync -= onAck;
-                _channel.BasicNacksAsync -= onNack;
-                _channel.BasicReturnAsync -= onReturn;
-            }
+            await confirmation.Task.ConfigureAwait(false);
         }
         finally
         {
-            _channelLock.Release();
+            channel.BasicAcksAsync -= onAck;
+            channel.BasicNacksAsync -= onNack;
+            channel.BasicReturnAsync -= onReturn;
         }
     }
 

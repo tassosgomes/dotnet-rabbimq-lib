@@ -89,6 +89,42 @@ public sealed class RmqPublisherTests
     }
 
     [Fact]
+    public async Task PublishAsync_ShouldRecreateChannelAndRedeclareQueue_WhenRetryUsesNewChannel()
+    {
+        var firstChannelMock = CreateChannelMock((_, _, _, _) => throw new IOException("network error"));
+        var secondChannelMock = CreateChannelMock();
+
+        var connectionManagerMock = new Mock<IRmqConnectionManager>();
+        connectionManagerMock
+            .SetupSequence(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(firstChannelMock.Object)
+            .ReturnsAsync(secondChannelMock.Object);
+
+        var queueManagerMock = new Mock<IQueueManager>();
+        var wrapperMock = new Mock<ICloudEventWrapper>();
+        wrapperMock.Setup(x => x.Wrap(It.IsAny<SamplePayload>(), It.IsAny<string?>())).Returns(new ReadOnlyMemory<byte>([1]));
+
+        var options = CreateOptions();
+        options.DefaultRetry.MaxAttempts = 2;
+        options.DefaultRetry.InitialDelay = TimeSpan.Zero;
+
+        await using var publisher = new RmqPublisher(
+            connectionManagerMock.Object,
+            queueManagerMock.Object,
+            wrapperMock.Object,
+            options,
+            NullLogger<RmqPublisher>.Instance);
+
+        await publisher.PublishAsync("orders", new SamplePayload(123));
+
+        connectionManagerMock.Verify(x => x.CreatePublisherChannelAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        queueManagerMock.Verify(
+            x => x.DeclareQueueWithDlqAsync(It.IsAny<IChannel>(), "orders", It.IsAny<QueueOptions>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+        firstChannelMock.Verify(x => x.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
     public async Task PublishAsync_ShouldThrowRmqPublishException_WhenRetriesExhausted()
     {
         var channelMock = CreateChannelMock((_, _, _, _) => throw new IOException("network error"));

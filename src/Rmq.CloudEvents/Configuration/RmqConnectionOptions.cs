@@ -41,4 +41,9 @@ public sealed class RmqConnectionOptions
     /// Intervalo de recuperacao de rede.
     /// </summary>
     public TimeSpan NetworkRecoveryInterval { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Nome opcional exposto para identificacao da conexao no broker.
+    /// </summary>
+    public string? ClientProvidedName { get; set; }
 }

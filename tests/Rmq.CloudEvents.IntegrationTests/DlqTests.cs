@@ -109,6 +109,10 @@ public sealed class DlqTests
         {
             virtualHost = "/";
         }
+        else
+        {
+            virtualHost = virtualHost.TrimStart('/');
+        }
 
         return new RmqConnectionOptions
         {

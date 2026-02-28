@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using Rmq.CloudEvents.CloudEvents;
 using Rmq.CloudEvents.Configuration;
 using Rmq.CloudEvents.Connection;
@@ -272,6 +273,93 @@ public sealed class RmqConsumerTests
         channelMock.Verify(x => x.BasicCancelAsync("consumer-tag", false, It.IsAny<CancellationToken>()), Times.Once);
         channelMock.Verify(x => x.CloseAsync(200, "Consumer stopped", false, It.IsAny<CancellationToken>()), Times.Once);
         channelMock.Verify(x => x.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task Consumer_ShouldRecover_WhenChannelShutdownIsRaised()
+    {
+        AsyncEventHandler<ShutdownEventArgs>? shutdownHandler = null;
+
+        var firstChannelMock = new Mock<IChannel>();
+        firstChannelMock.SetupGet(x => x.IsOpen).Returns(true);
+        firstChannelMock
+            .SetupAdd(x => x.ChannelShutdownAsync += It.IsAny<AsyncEventHandler<ShutdownEventArgs>>())
+            .Callback<AsyncEventHandler<ShutdownEventArgs>>(handler => shutdownHandler += handler);
+        firstChannelMock
+            .SetupRemove(x => x.ChannelShutdownAsync -= It.IsAny<AsyncEventHandler<ShutdownEventArgs>>())
+            .Callback<AsyncEventHandler<ShutdownEventArgs>>(handler => shutdownHandler -= handler);
+        firstChannelMock
+            .Setup(x => x.BasicConsumeAsync(
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>?>(),
+                It.IsAny<IAsyncBasicConsumer>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("consumer-tag-1");
+        firstChannelMock
+            .Setup(x => x.BasicCancelAsync(It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        firstChannelMock
+            .Setup(x => x.CloseAsync(It.IsAny<ushort>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var secondChannelMock = new Mock<IChannel>();
+        secondChannelMock.SetupGet(x => x.IsOpen).Returns(true);
+        secondChannelMock
+            .Setup(x => x.BasicConsumeAsync(
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>?>(),
+                It.IsAny<IAsyncBasicConsumer>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("consumer-tag-2");
+        secondChannelMock
+            .Setup(x => x.BasicCancelAsync(It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        secondChannelMock
+            .Setup(x => x.CloseAsync(It.IsAny<ushort>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var connectionManagerMock = new Mock<IRmqConnectionManager>();
+        var connectionMock = new Mock<IConnection>();
+        connectionManagerMock.Setup(x => x.GetConnectionAsync(It.IsAny<CancellationToken>())).ReturnsAsync(connectionMock.Object);
+        connectionManagerMock
+            .SetupSequence(x => x.CreateChannelAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(firstChannelMock.Object)
+            .ReturnsAsync(secondChannelMock.Object);
+
+        var queueManagerMock = new Mock<IQueueManager>();
+        var options = new RmqOptions();
+        options.Connection.NetworkRecoveryInterval = TimeSpan.FromMilliseconds(1);
+
+        await using var consumer = new RmqConsumer<TestPayload>(
+            connectionManagerMock.Object,
+            queueManagerMock.Object,
+            new Mock<ICloudEventWrapper>().Object,
+            CreateHandlerInvoker(),
+            options,
+            "orders",
+            NullLogger<RmqConsumer<TestPayload>>.Instance);
+
+        await consumer.StartAsync();
+        shutdownHandler.Should().NotBeNull();
+
+        await shutdownHandler!(firstChannelMock.Object, new ShutdownEventArgs(ShutdownInitiator.Library, 500, "test"));
+        await Task.Delay(50);
+
+        connectionManagerMock.Verify(x => x.CreateChannelAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        queueManagerMock.Verify(
+            x => x.DeclareQueueWithDlqAsync(It.IsAny<IChannel>(), "orders", It.IsAny<QueueOptions>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+        secondChannelMock.Verify(
+            x => x.BasicConsumeAsync("orders", false, It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<bool>(), It.IsAny<IDictionary<string, object?>?>(), It.IsAny<IAsyncBasicConsumer>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     public sealed record TestPayload(int Id);

@@ -16,6 +16,10 @@ Biblioteca .NET 8 para publicacao e consumo com RabbitMQ usando quorum queues, r
 - Retry exponencial com Polly para publish e execucao do handler do consumer.
 - Registro orientado a DI para ASP.NET Core / Worker Service.
 - Pipeline de consumo com ACK automatico em sucesso e NACK (`requeue: false`) em falha final.
+- Suporte a pub/sub com Topic Exchange usando routing keys e bindings com wildcard (`*`, `#`).
+- Novo metodo DI `AddRmqTopicConsumer<TMessage, THandler>(Action<TopicSubscriptionOptions>)`.
+- Diagnosticos nativos com `ActivitySource` e `Meter` para tracing e metricas.
+- Recuperacao automatica da sessao de consumo apos shutdown de canal ou callback exception.
 
 ## Requisitos
 
@@ -82,6 +86,19 @@ public sealed class OrderCreatedHandler : IRmqMessageHandler<OrderCreated>
 public sealed record OrderCreated(int OrderId, string CustomerId, decimal Total);
 ```
 
+Registro de consumer para topic exchange (pub/sub):
+
+```csharp
+builder.Services.AddRmqTopicConsumer<OrderEvent, OrderAuditHandler>(opts =>
+{
+    opts.ExchangeName = "business-events";
+    opts.QueueName = "order-audit";
+    opts.BindingPatterns = ["orders.*"];
+});
+
+public sealed record OrderEvent(int OrderId, string CustomerId, string Action);
+```
+
 ### 3) Publicacao de mensagens
 
 ```csharp
@@ -110,6 +127,17 @@ await publisher.PublishAsync(
     cancellationToken: cancellationToken);
 ```
 
+Publicacao em topic exchange:
+
+```csharp
+await publisher.PublishToTopicAsync(
+    exchangeName: "business-events",
+    routingKey: "orders.created",
+    payload: new OrderEvent(1, "cust-001", "created"),
+    cloudEventType: "com.minhaempresa.order.event.v1",
+    cancellationToken: cancellationToken);
+```
+
 ## Modelo de Configuracao
 
 Objeto raiz: `RmqOptions`
@@ -125,17 +153,60 @@ Objeto raiz: `RmqOptions`
   - `UseJitter` (padrao `true`)
 - `Queues` (`Dictionary<string, QueueOptions>`)
   - Override por queue para quorum size, delivery limit, retry e sufixo de DLQ.
+- `Exchanges` (`Dictionary<string, ExchangeOptions>`)
+  - Declaracao nomeada de exchanges (topic/direct) usada por `PublishToTopicAsync` e consumers de topico.
+
+Objeto de configuracao do consumer de topico: `TopicSubscriptionOptions`
+
+- `ExchangeName` (obrigatorio)
+- `QueueName` (obrigatorio)
+- `BindingPatterns` (obrigatorio, um ou mais; suporta `*` e `#`)
+- `Retry` (override opcional)
+- `Dlq` (override opcional)
 
 ## Comportamento em Runtime
 
 - Publish:
   - Payload encapsulado em CloudEvent JSON (`application/cloudevents+json`).
-  - Topologia da queue declarada antes do primeiro publish (idempotente).
+  - Topologia da queue declarada antes do primeiro publish (idempotente) e redeclarada apos falhas do broker.
+  - Para publish em topic, a topologia da exchange e declarada antes do primeiro envio (idempotente) e redeclarada apos falhas do broker.
   - Retry para falhas transientes de RabbitMQ/rede.
+  - Cada tentativa de publish usa um canal dedicado com publisher confirm, eliminando gargalo de canal compartilhado.
 - Consume:
   - A mensagem e desencapsulada de CloudEvent e o handler recebe apenas o payload.
   - Sucesso: ACK.
   - Falha final: NACK com `requeue: false`, roteando para DLQ.
+  - Cancelamento durante o processamento: NACK com `requeue: true`.
+  - Em consumers de topico, `MessageContext` tambem inclui `ExchangeName` e `RoutingKey`.
+  - Se o broker encerrar o canal, o hosted consumer recria a topologia e retoma o consumo automaticamente.
+
+## Observabilidade
+
+A biblioteca expoe identificadores publicos em `Rmq.CloudEvents.Diagnostics.RmqCloudEventsTelemetry`:
+
+- `ActivitySourceName`
+- `MeterName`
+- `Version`
+
+Registro tipico com OpenTelemetry:
+
+```csharp
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
+using Rmq.CloudEvents.Diagnostics;
+
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddSource(RmqCloudEventsTelemetry.ActivitySourceName))
+    .WithMetrics(metrics => metrics
+        .AddMeter(RmqCloudEventsTelemetry.MeterName));
+```
+
+Metricas emitidas atualmente:
+
+- `rmq.connection.attempts`, `rmq.connection.successes`, `rmq.connection.failures`, `rmq.connection.duration.ms`
+- `rmq.publish.attempts`, `rmq.publish.successes`, `rmq.publish.failures`, `rmq.publish.retries`, `rmq.publish.duration.ms`
+- `rmq.consume.attempts`, `rmq.consume.successes`, `rmq.consume.failures`, `rmq.consume.retries`, `rmq.consume.duration.ms`
 
 ## Fluxo de Retry e DLX
 
@@ -171,6 +242,8 @@ dotnet test tests/Rmq.CloudEvents.Tests
 dotnet test tests/Rmq.CloudEvents.IntegrationTests
 ```
 
+A cobertura de integracao inclui cenarios de restart do broker e recuperacao automatica dos consumers.
+
 ## CI
 
 Pipeline em `.github/workflows/ci.yml` com:
@@ -199,7 +272,7 @@ Tambem e possivel executar manualmente via GitHub Actions (`workflow_dispatch`) 
 
 ## Sample
 
-Veja `samples/Rmq.CloudEvents.Sample/Program.cs` para um exemplo completo com DI + publish + consume.
+Veja `samples/Rmq.CloudEvents.Sample/Program.cs` para um exemplo completo com queue direta e pub/sub em topic exchange.
 
 ## Licenca
 

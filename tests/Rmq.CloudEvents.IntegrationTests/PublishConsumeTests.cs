@@ -190,6 +190,10 @@ public sealed class PublishConsumeTests
         {
             virtualHost = "/";
         }
+        else
+        {
+            virtualHost = virtualHost.TrimStart('/');
+        }
 
         return (
             new RmqConnectionOptions

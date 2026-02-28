@@ -30,7 +30,11 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configure);
 
-        services.Configure(configure);
+        services.AddSingleton<IValidateOptions<RmqOptions>, RmqOptionsValidator>();
+        services
+            .AddOptions<RmqOptions>()
+            .Configure(configure)
+            .ValidateOnStart();
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<RmqOptions>>().Value);
         services.AddSingleton(sp => sp.GetRequiredService<RmqOptions>().Connection);
         services.AddSingleton(sp => sp.GetRequiredService<RmqOptions>().DefaultCloudEvents);
@@ -39,7 +43,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IQueueManager, QueueManager>();
         services.AddSingleton<ICloudEventWrapper, CloudEventWrapper>();
         services.AddSingleton<IMessageSerializer, SystemTextJsonMessageSerializer>();
-        services.AddTransient<IRmqPublisher, RmqPublisher>();
+        services.AddSingleton<IRmqPublisher, RmqPublisher>();
 
         return services;
     }

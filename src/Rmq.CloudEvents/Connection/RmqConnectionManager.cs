@@ -2,6 +2,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using RabbitMQ.Client;
 using Rmq.CloudEvents.Configuration;
+using Rmq.CloudEvents.Diagnostics;
+using System.Diagnostics;
 
 namespace Rmq.CloudEvents.Connection;
 
@@ -64,9 +66,29 @@ internal sealed class RmqConnectionManager : IRmqConnectionManager
             }
 
             var factory = _connectionFactoryFactory();
-            _connection = await _createConnection(factory, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("Conexao RabbitMQ estabelecida em {Host}:{Port}", _options.HostName, _options.Port);
-            return _connection;
+            var stopwatch = Stopwatch.StartNew();
+            using var activity = RmqDiagnostics.StartConnectionActivity(_options.HostName, _options.Port);
+            RmqDiagnostics.RecordConnectionAttempt(_options.HostName, _options.Port);
+
+            try
+            {
+                _connection = await _createConnection(factory, cancellationToken).ConfigureAwait(false);
+                stopwatch.Stop();
+                activity?.SetStatus(ActivityStatusCode.Ok);
+                RmqDiagnostics.RecordConnectionSuccess(_options.HostName, _options.Port, stopwatch.Elapsed.TotalMilliseconds);
+                _logger.LogInformation("Conexao RabbitMQ estabelecida em {Host}:{Port}", _options.HostName, _options.Port);
+                return _connection;
+            }
+            catch (Exception ex)
+            {
+                stopwatch.Stop();
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.SetTag("exception.type", ex.GetType().FullName);
+                activity?.SetTag("exception.message", ex.Message);
+                RmqDiagnostics.RecordConnectionFailure(_options.HostName, _options.Port, stopwatch.Elapsed.TotalMilliseconds);
+                _logger.LogError(ex, "Falha ao estabelecer conexao RabbitMQ em {Host}:{Port}", _options.HostName, _options.Port);
+                throw;
+            }
         }
         finally
         {
@@ -114,6 +136,7 @@ internal sealed class RmqConnectionManager : IRmqConnectionManager
             UserName = _options.UserName,
             Password = _options.Password,
             VirtualHost = _options.VirtualHost,
+            ClientProvidedName = _options.ClientProvidedName,
             AutomaticRecoveryEnabled = true,
             TopologyRecoveryEnabled = true,
             NetworkRecoveryInterval = _options.NetworkRecoveryInterval
