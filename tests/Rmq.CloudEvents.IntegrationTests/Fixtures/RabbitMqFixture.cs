@@ -261,10 +261,12 @@ public sealed class RabbitMqFixture : IAsyncLifetime
 
         try
         {
-            _managementBaseUri = new Uri($"http://127.0.0.1:{_container.GetMappedPublicPort(15672)}/");
+            var managementPort = _container.GetMappedPublicPort(15672);
+            _managementBaseUri = new Uri($"http://127.0.0.1:{managementPort}/");
             _managementClient = CreateManagementClient(_managementBaseUri, "guest", "guest");
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (
+            ex is InvalidOperationException or NullReferenceException)
         {
             // Local fixture may expose only AMQP; management API remains optional.
         }
